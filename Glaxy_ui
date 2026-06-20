@@ -1342,7 +1342,8 @@ function GalaxyUI:CreateWindow(opts)
 		Name = "MiniLauncher", AnchorPoint = Vector2.new(0.5, 0.5), ClipsDescendants = true,
 		Position = UDim2.new(0, 64, 0.5, 0), Size = UDim2.new(0, 48, 0, 48),
 		BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.15,
-		Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=48&h=48", ImageTransparency = 0, ScaleType = Enum.ScaleType.Crop,
+		Image = hasAsset(miniIcon) and miniIcon or "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=48&h=48",
+		ImageTransparency = 0, ScaleType = Enum.ScaleType.Crop,
 		AutoButtonColor = false, ZIndex = 60, Parent = sg,
 	})
 	corner(24, mini)
