@@ -1185,7 +1185,31 @@ function GalaxyUI:CreateWindow(opts)
 		Size = UDim2.new(0, 860, 0, 540), BackgroundColor3 = Theme.Background,
 		ClipsDescendants = true, Parent = sg,
 	})
-	corner(26, main) stroke(main, Theme.Stroke, 1)
+	corner(26, main)
+	-- animated laser sweep border around the whole window
+	local mainLaser = new("UIStroke", {
+		Color = Color3.fromRGB(255, 255, 255),
+		Thickness = 1.5,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		Parent = main,
+	})
+	local mainLaserGrad = new("UIGradient", {
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0,    Color3.fromRGB(60,  60,  80)),
+			ColorSequenceKeypoint.new(0.42, Color3.fromRGB(150, 150, 180)),
+			ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(255, 255, 255)),
+			ColorSequenceKeypoint.new(0.58, Color3.fromRGB(150, 150, 180)),
+			ColorSequenceKeypoint.new(1,    Color3.fromRGB(60,  60,  80)),
+		}),
+		Parent = mainLaser,
+	})
+	local mainSweep = 0
+	local mainLaserConn
+	mainLaserConn = RunService.RenderStepped:Connect(function(dt)
+		if not main.Parent then mainLaserConn:Disconnect() return end
+		mainSweep = (mainSweep + dt * 0.5) % 1
+		mainLaserGrad.Offset = Vector2.new(mainSweep * 2 - 1, 0)
+	end)
 	-- OPTIONAL custom background image (set opts.Background or ASSETS.Background)
 	local bgImage = opts.Background or ASSETS.Background
 	if hasAsset(bgImage) then
