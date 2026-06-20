@@ -1312,13 +1312,13 @@ function GalaxyUI:CreateWindow(opts)
 		Size = UDim2.new(0, 188, 1, 0), BackgroundColor3 = Theme.Element, BackgroundTransparency = 0.5, ZIndex = 2, Parent = tabBar })
 	corner(10, profile) stroke(profile, Theme.Stroke, 1)
 	local avatar = new("ImageLabel", { AnchorPoint = Vector2.new(0,0.5), Position = UDim2.new(0,8,0.5,0),
-		Size = UDim2.new(0,34,0,34), BackgroundColor3 = Theme.PanelLight, ZIndex = 2, Parent = profile, Name = "Avatar" })
+		Size = UDim2.new(0,34,0,34), BackgroundColor3 = Theme.PanelLight, BackgroundTransparency = 1,
+		ClipsDescendants = true, ImageTransparency = 0, ScaleType = Enum.ScaleType.Crop, ZIndex = 2, Parent = profile, Name = "Avatar" })
 	corner(17, avatar) stroke(avatar, Theme.StrokeLight, 1)
 	if hasAsset(opts.Avatar) then
 		avatar.Image = opts.Avatar
 	else
-		-- rbxthumb loads the real player avatar instantly on all executors
-		avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=48&h=48"
+		avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150"
 	end
 	new("TextLabel", { Position = UDim2.new(0,50,0,8), Size = UDim2.new(1,-58,0,16), BackgroundTransparency = 1,
 		Font = FONT_BOLD, Text = displayName .. "  \u{2713}", TextColor3 = Theme.Text, TextSize = 13,
