@@ -21,11 +21,11 @@ local LocalPlayer = Players.LocalPlayer
 -- ASSETS  (paste your uploaded image IDs here)
 --========================================================
 local ASSETS = {
-	GalaxySpiral = "rbxassetid://0", -- spiral galaxy (logo, profile, frames, tab bg)
+	GalaxySpiral = "rbxassetid://11878291121", -- spiral galaxy (logo, profile, frames, tab bg)
 	HeaderGalaxy = "rbxassetid://0", -- wide galaxy glow for the header
-	StarTexture  = "rbxassetid://0", -- optional star/noise overlay
-	MiniIcon     = "rbxassetid://0", -- floating mini launcher button icon
-	Background   = "rbxassetid://0", -- optional full-window background image
+	StarTexture  = "rbxassetid://75399697853679", -- optional star/noise overlay
+	MiniIcon     = "rbxassetid://11878291121", -- floating mini launcher button icon
+	Background   = "rbxassetid://11878291121", -- optional full-window background image
 }
 
 -- Sidebar icons (white line icons). Leave at 0 to draw a small circle instead.
@@ -266,6 +266,26 @@ end
 local GalaxyUI = {}
 GalaxyUI.__index = GalaxyUI
 
+--========================================================
+-- CONFIG API  (edit every image ID from your own script)
+--   Galaxy:SetAssets({ GalaxySpiral = "rbxassetid://123", MiniIcon = "rbxassetid://456" })
+--   Galaxy:SetIcons({ Home = "rbxassetid://123", Settings = "rbxassetid://456" })
+-- Or just edit the ASSETS / ICONS tables at the very top of this file.
+--========================================================
+function GalaxyUI:SetAssets(tbl)
+	for k, v in pairs(tbl or {}) do ASSETS[k] = v end
+	return ASSETS
+end
+
+function GalaxyUI:SetIcons(tbl)
+	for k, v in pairs(tbl or {}) do ICONS[k] = v end
+	return ICONS
+end
+
+-- read/edit the tables directly too: Galaxy.Assets.MiniIcon = "rbxassetid://..."
+GalaxyUI.Assets = ASSETS
+GalaxyUI.Icons  = ICONS
+
 local function getScreenGui()
 	-- reuse one ScreenGui for this run (the key system + window share it)
 	if GalaxyUI._activeGui and GalaxyUI._activeGui.Parent then
@@ -293,10 +313,10 @@ end
 -- NOTIFICATIONS
 --========================================================
 local NOTIFY_STYLES = {
-	Success = { color = Theme.Success, glyph = "\u{2713}" },
+	Success = { color = Theme.Success, glyph = "✓" },
 	Info    = { color = Theme.Info,    glyph = "i" },
 	Warning = { color = Theme.Warning, glyph = "!" },
-	Error   = { color = Theme.Error,   glyph = "\u{2715}" },
+	Error   = { color = Theme.Error,   glyph = "✕" },
 }
 
 function GalaxyUI:Notify(opts)
@@ -785,7 +805,7 @@ local function buildElements(container, lib)
 		elseif variant == "Icon" then
 			btn.BackgroundColor3 = Color3.fromRGB(0, 0, 0) btn.BackgroundTransparency = 0.5
 			btn.TextColor3 = Theme.Text
-			btn.Text = (opts.Glyph or "\u{2605}") .. "   " .. (opts.Title or "")
+			btn.Text = (opts.Glyph or "★") .. "   " .. (opts.Title or "")
 			stroke(btn, Theme.Stroke, 1)
 		else -- Secondary
 			btn.BackgroundColor3 = Color3.fromRGB(0, 0, 0) btn.BackgroundTransparency = 0.5
@@ -852,7 +872,7 @@ local function buildElements(container, lib)
 				Position = UDim2.new(1, 0, 0.5, 0),
 				Size = UDim2.new(0, 20, 0, 20),
 				BackgroundTransparency = 1,
-				Font = FONT, Text = "\u{1F441}", TextColor3 = Theme.SubText, TextSize = 13,
+				Font = FONT, Text = "👁", TextColor3 = Theme.SubText, TextSize = 13,
 				Parent = row,
 			})
 			box:GetPropertyChangedSignal("Text"):Connect(function()
@@ -1073,15 +1093,26 @@ local function buildElements(container, lib)
 		opts = opts or {}
 		local key = opts.Default or Enum.KeyCode.E
 		local binding = false
+		local isToggle = opts.Toggle or false
+		local toggleState = false
 		local row = baseRow()
 		local keyBox = new("TextLabel", {
 			Position = UDim2.new(0,0,0.5,0), AnchorPoint = Vector2.new(0,0.5),
 			Size = UDim2.new(0,30,0,24), BackgroundColor3 = Theme.PanelLight,
 			Font = FONT_BOLD, Text = key.Name, TextColor3 = Theme.Text, TextSize = 12, Parent = row })
 		corner(5, keyBox) stroke(keyBox, Theme.Stroke, 1)
-		new("TextLabel", { Position = UDim2.new(0,42,0,0), Size = UDim2.new(1,-42,1,0), BackgroundTransparency = 1,
+		new("TextLabel", { Position = UDim2.new(0,42,0,0), Size = UDim2.new(1,-86,1,0), BackgroundTransparency = 1,
 			Font = FONT, Text = opts.Title or "Keybind", TextColor3 = Theme.SubText, TextSize = 13,
 			TextXAlignment = Enum.TextXAlignment.Left, Parent = row })
+		-- ON/OFF badge (only when Toggle = true)
+		local stateLbl
+		if isToggle then
+			stateLbl = new("TextLabel", {
+				AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+				Size = UDim2.new(0, 36, 0, 20), BackgroundColor3 = Theme.ToggleOff,
+				Font = FONT_BOLD, Text = "OFF", TextColor3 = Theme.SubText, TextSize = 11, Parent = row })
+			corner(5, stateLbl)
+		end
 		local hit = new("TextButton", { Size = UDim2.new(0,30,0,24), Position = UDim2.new(0,0,0.5,0), AnchorPoint = Vector2.new(0,0.5),
 			BackgroundTransparency = 1, Text = "", Parent = row })
 		hit.MouseButton1Click:Connect(function() binding = true keyBox.Text = "..." end)
@@ -1089,10 +1120,35 @@ local function buildElements(container, lib)
 			if binding and input.UserInputType == Enum.UserInputType.Keyboard then
 				key = input.KeyCode keyBox.Text = key.Name binding = false
 			elseif not gpe and input.KeyCode == key then
-				if opts.Callback then opts.Callback() end
+				if isToggle then
+					toggleState = not toggleState
+					if stateLbl then
+						stateLbl.Text = toggleState and "ON" or "OFF"
+						tween(stateLbl, 0.12, {
+							BackgroundColor3 = toggleState and Theme.Success or Theme.ToggleOff,
+							TextColor3 = toggleState and Color3.fromRGB(10,10,12) or Theme.SubText,
+						})
+					end
+					if opts.Callback then opts.Callback(toggleState) end
+				else
+					if opts.Callback then opts.Callback() end
+				end
 			end
 		end)
-		return { Get = function() return key end }
+		return {
+			Get = function() return key end,
+			GetState = function() return toggleState end,
+			SetState = function(v)
+				toggleState = v
+				if stateLbl then
+					stateLbl.Text = toggleState and "ON" or "OFF"
+					tween(stateLbl, 0.12, {
+						BackgroundColor3 = toggleState and Theme.Success or Theme.ToggleOff,
+						TextColor3 = toggleState and Color3.fromRGB(10,10,12) or Theme.SubText,
+					})
+				end
+			end,
+		}
 	end
 
 	function E:CreateProgressBar(opts)
@@ -1281,7 +1337,7 @@ function GalaxyUI:CreateWindow(opts)
 		b.MouseLeave:Connect(function() tween(b, 0.1, { TextColor3 = Theme.SubText }) end)
 		return b
 	end
-	local minBtn, closeBtn = ctrl("\u{2014}"), ctrl("X")
+	local minBtn, closeBtn = ctrl("—"), ctrl("X")
 	minBtn.MouseButton1Click:Connect(function()
 		minimized = not minimized
 		if doMinimize then doMinimize(minimized) end
@@ -1321,7 +1377,7 @@ function GalaxyUI:CreateWindow(opts)
 		avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150"
 	end
 	new("TextLabel", { Position = UDim2.new(0,50,0,8), Size = UDim2.new(1,-58,0,16), BackgroundTransparency = 1,
-		Font = FONT_BOLD, Text = displayName .. "  \u{2713}", TextColor3 = Theme.Text, TextSize = 13,
+		Font = FONT_BOLD, Text = displayName .. "  ✓", TextColor3 = Theme.Text, TextSize = 13,
 		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2, Parent = profile })
 	new("TextLabel", { Position = UDim2.new(0,50,0,26), Size = UDim2.new(1,-58,0,14), BackgroundTransparency = 1,
 		Font = FONT, Text = "@" .. userName, TextColor3 = Theme.SubText, TextSize = 11,
@@ -1341,7 +1397,7 @@ function GalaxyUI:CreateWindow(opts)
 	local mini = new("ImageButton", {
 		Name = "MiniLauncher", AnchorPoint = Vector2.new(0.5, 0.5), ClipsDescendants = true,
 		Position = UDim2.new(0, 64, 0.5, 0), Size = UDim2.new(0, 48, 0, 48),
-		BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.15,
+		BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0,
 		Image = hasAsset(miniIcon) and miniIcon or "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=48&h=48",
 		ImageTransparency = 0, ScaleType = Enum.ScaleType.Crop,
 		AutoButtonColor = false, ZIndex = 60, Parent = sg,
@@ -1427,6 +1483,12 @@ function GalaxyUI:CreateWindow(opts)
 	end)
 
 	function Window:CreateTab(name, icon)
+		-- accept ("Name", iconId) OR ({ Name = "Name", Icon = "rbxassetid://123" })
+		if type(name) == "table" then
+			local o = name
+			name = o.Name or o.Title or "Tab"
+			icon = o.Icon or o.Image or o.Logo or icon
+		end
 		-- top-strip tab styled as an auto-width pill BUTTON (icon + label)
 		local btn = new("TextButton", { Size = UDim2.new(0, 0, 0, 30), AutomaticSize = Enum.AutomaticSize.X,
 			BackgroundColor3 = Color3.fromRGB(0, 0, 0), AutoButtonColor = false, Text = "", ZIndex = 2, Parent = tabHolder })
@@ -1557,4 +1619,251 @@ function GalaxyUI:CreateWindow(opts)
 	return Window
 end
 
-return setmetatable({}, GalaxyUI)
+local Galaxy = setmetatable({}, GalaxyUI)
+
+--========================================================
+-- EDIT YOUR IMAGE IDs HERE - no need to touch the library above
+--========================================================
+-- Every image the UI uses. Leave any as "rbxassetid://0" to skip it.
+local IMAGES = {
+	GalaxySpiral = "rbxassetid://11878291121", -- header logo + profile + frames
+	HeaderGalaxy = "rbxassetid://0", -- wide header glow
+	StarTexture  = "rbxassetid://75399697853679", -- star overlay texture
+	MiniIcon     = "rbxassetid://11878291121", -- floating mini launcher icon
+	Background   = "rbxassetid://11878291121", -- full-window background image
+}
+-- Image shown BEFORE each tab's title (the tab icon). Leave 0 for text-only.
+local TAB_ICONS = {
+	Home     = "rbxassetid://0",
+	Combat   = "rbxassetid://0",
+	Visuals  = "rbxassetid://0",
+	Player   = "rbxassetid://0",
+	Settings = "rbxassetid://0",
+}
+-- apply the IDs above (no need to edit anything inside the library)
+for k, v in pairs(IMAGES) do ASSETS[k] = v end
+
+--========================================================
+-- EXAMPLE USAGE (recreates the reference layout)
+-- Keep this in the SAME script as the library above.
+-- Do NOT put `return` before this line, or you'll get:
+--   Expected <eof>, got 'local'
+--========================================================
+-- KEY SYSTEM (galaxy-styled gate). The dim backdrop blocks everything and the
+-- whole UI is ONLY built after a correct key is entered. Demo key: x_375
+local function buildUI()
+
+-- image IDs + tab icons are configured at the TOP of this section (IMAGES / TAB_ICONS).
+
+local Window = Galaxy:CreateWindow({
+	Title = "GALAXY UI",
+	SubTitle = "UI LIBRARY",
+	Tagline = "Built for developers.\nInspired by the universe.",
+	User = "NexoDev",
+	Role = "Developer",
+})
+
+-- a tab logo is just an image id: edit TAB_ICONS above, or pass { Name = "Home", Icon = "rbxassetid://123" }
+local Home = Window:CreateTab("Home", TAB_ICONS.Home)
+
+-- LAYOUT: 3-column grid (sections side-by-side, like the reference image)
+local cols = Home:CreateColumns(3)
+local col1, col2, col3 = cols[1], cols[2], cols[3]
+
+-- BUTTONS card
+local btns = col1:CreateGroup({ Title = "Buttons" })
+btns:CreateButton({ Title = "PRIMARY BUTTON",   Variant = "Primary",   Callback = function() end })
+btns:CreateButton({ Title = "SECONDARY BUTTON", Variant = "Secondary", Callback = function() end })
+btns:CreateButton({ Title = "OUTLINE BUTTON",   Variant = "Outline",   Callback = function() end })
+btns:CreateButton({ Title = "GHOST BUTTON",     Variant = "Ghost",     Callback = function() end })
+btns:CreateButton({ Title = "ICON BUTTON", Variant = "Icon", Glyph = "★",  Callback = function() end })
+
+-- EXAMPLE BUTTONS card (buttons that actually do something)
+local demo = col1:CreateGroup({ Title = "Example Buttons" })
+
+demo:CreateButton({ Title = "NOTIFY ME", Variant = "Primary", Callback = function()
+	Galaxy:Notify({ Type = "Success", Title = "Hello!", Content = "You pressed the button.", Duration = 4 })
+end })
+
+local clicks = 0
+local counterBtn
+counterBtn = demo:CreateButton({ Title = "CLICKED 0 TIMES", Variant = "Secondary", Callback = function()
+	clicks = clicks + 1
+	counterBtn.Text = "CLICKED " .. clicks .. " TIMES"
+end })
+
+demo:CreateButton({ Title = "COPY DISCORD LINK", Variant = "Outline", Callback = function()
+	if setclipboard then setclipboard("https://discord.gg/your-invite") end
+	Galaxy:Notify({ Type = "Info", Title = "Copied", Content = "Discord link copied to clipboard." })
+end })
+
+demo:CreateButton({ Title = "REJOIN SERVER", Variant = "Secondary", Callback = function()
+	local TS = game:GetService("TeleportService")
+	TS:Teleport(game.PlaceId, game.Players.LocalPlayer)
+end })
+
+demo:CreateButton({ Title = "RESET CHARACTER", Variant = "Outline", Callback = function()
+	local char = game.Players.LocalPlayer.Character
+	if char and char:FindFirstChild("Humanoid") then char.Humanoid.Health = 0 end
+end })
+
+demo:CreateButton({ Title = "DANGER ACTION", Variant = "Ghost", Callback = function()
+	Galaxy:Notify({ Type = "Warning", Title = "Are you sure?", Content = "This is a ghost-style button." })
+end })
+
+-- INPUTS card
+local inputs = col1:CreateGroup({ Title = "Inputs" })
+inputs:CreateInput({ Placeholder = "Username", Glyph = "👤" })
+inputs:CreateInput({ Placeholder = "Password", Glyph = "🔒", Password = true })
+inputs:CreateInput({ Placeholder = "Multi-line input...", Multiline = true })
+
+-- TOGGLES card
+local tog = col2:CreateGroup({ Title = "Toggles" })
+tog:CreateToggle({ Title = "Default Toggle", Default = true })
+tog:CreateToggle({ Title = "Disabled Toggle", Disabled = true })
+tog:CreateToggle({ Title = "Switch Style", Default = true })
+
+-- SLIDERS card
+local sld = col2:CreateGroup({ Title = "Sliders" })
+sld:CreateSlider({ Title = "Volume", Default = 75 })
+sld:CreateSlider({ Title = "Brightness", Default = 40 })
+sld:CreateRangeSlider({ Title = "Range", DefaultMin = 20, DefaultMax = 80 })
+
+-- DROPDOWN card
+local dd = col2:CreateGroup({ Title = "Dropdowns" })
+dd:CreateDropdown({ Title = "Select an option", Options = { "Option 1", "Option 2", "Option 3", "Option 4" }, Callback = function(v) print(v) end })
+
+-- SECTIONS / FRAMES card
+local sec = col3:CreateGroup({ Title = "Sections / Frames" })
+sec:CreateFrame({ Title = "Section Title", Content = "This is an example of a framed section. You can put anything here.", ButtonText = "LEARN MORE" })
+
+-- KEYBINDS card
+local kb = col3:CreateGroup({ Title = "Keybinds" })
+kb:CreateKeybind({ Title = "Toggle Menu", Default = Enum.KeyCode.Q, Toggle = true })
+kb:CreateKeybind({ Title = "Silent Aim",  Default = Enum.KeyCode.E, Toggle = true })
+kb:CreateKeybind({ Title = "Wall Check",  Default = Enum.KeyCode.R, Toggle = true })
+kb:CreateKeybind({ Title = "Lock Target", Default = Enum.KeyCode.X, Toggle = true })
+
+-- PROGRESS + LOADING
+local misc = col3:CreateGroup({ Title = "Progress" })
+local bar = misc:CreateProgressBar({ Title = "Progress Bar", Value = 68 })
+misc:CreateLoadingIndicator()
+
+--========================================================
+-- COMBAT TAB (working toggles + sliders)
+--========================================================
+local Combat = Window:CreateTab("Combat", TAB_ICONS.Combat)
+
+local aimSec = Combat:CreateGroup({ Title = "Aimbot" })
+local aimbotOn = false
+local aimbotToggle = aimSec:CreateToggle({ Title = "Enable Aimbot", Default = false, Callback = function(on)
+	aimbotOn = on
+	Galaxy:Notify({ Type = on and "Success" or "Info", Title = "Aimbot", Content = on and "Enabled" or "Disabled" })
+end })
+-- Press Y: ON -> OFF -> ON -> OFF ... (toggle keybind)
+aimSec:CreateKeybind({ Title = "Aimbot Toggle", Default = Enum.KeyCode.Y, Toggle = true, Callback = function(on)
+	aimbotOn = on
+	aimbotToggle.Set(on)  -- syncs the toggle switch
+	Galaxy:Notify({ Type = on and "Success" or "Info", Title = "Aimbot", Content = on and "ON" or "OFF" })
+end })
+aimSec:CreateSlider({ Title = "Smoothness", Min = 0, Max = 100, Default = 35, Callback = function(v) print("Smoothness:", v) end })
+aimSec:CreateSlider({ Title = "FOV", Min = 10, Max = 500, Default = 120, Suffix = "px", Callback = function(v) print("FOV:", v) end })
+aimSec:CreateDropdown({ Title = "Target Part", Options = { "Head", "Torso", "Random" }, Default = "Head", Callback = function(v) print("Target:", v) end })
+
+local meleeSec = Combat:CreateGroup({ Title = "Melee" })
+meleeSec:CreateToggle({ Title = "Auto Swing", Default = false })
+meleeSec:CreateSlider({ Title = "Reach", Min = 1, Max = 50, Default = 10, Suffix = " studs" })
+
+--========================================================
+-- VISUALS TAB (working world tweaks)
+--========================================================
+local Visuals = Window:CreateTab("Visuals", TAB_ICONS.Visuals)
+
+local espSec = Visuals:CreateGroup({ Title = "ESP" })
+espSec:CreateToggle({ Title = "Box ESP", Default = false })
+espSec:CreateToggle({ Title = "Name ESP", Default = true })
+espSec:CreateToggle({ Title = "Tracers", Default = false })
+espSec:CreateSlider({ Title = "Max Distance", Min = 100, Max = 5000, Default = 1000, Suffix = "m" })
+
+local worldSec = Visuals:CreateGroup({ Title = "World" })
+worldSec:CreateToggle({ Title = "Fullbright", Default = false, Callback = function(on)
+	local L = game:GetService("Lighting")
+	L.Brightness = on and 3 or 1
+end })
+worldSec:CreateSlider({ Title = "Field of View", Min = 70, Max = 120, Default = 70, Callback = function(v)
+	if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = v end
+end })
+
+--========================================================
+-- PLAYER TAB (REAL working movement)
+--========================================================
+local PlayerTab = Window:CreateTab("Player", TAB_ICONS.Player)
+local LP = game:GetService("Players").LocalPlayer
+
+local function getHumanoid()
+	local char = LP.Character
+	return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local moveSec = PlayerTab:CreateGroup({ Title = "Movement" })
+moveSec:CreateSlider({ Title = "Walk Speed", Min = 16, Max = 250, Default = 16, Callback = function(v)
+	local hum = getHumanoid() if hum then hum.WalkSpeed = v end
+end })
+moveSec:CreateSlider({ Title = "Jump Power", Min = 50, Max = 350, Default = 50, Callback = function(v)
+	local hum = getHumanoid()
+	if hum then hum.UseJumpPower = true hum.JumpPower = v end
+end })
+
+local infJump = false
+moveSec:CreateToggle({ Title = "Infinite Jump", Default = false, Callback = function(on) infJump = on end })
+game:GetService("UserInputService").JumpRequest:Connect(function()
+	if infJump then
+		local hum = getHumanoid()
+		if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end
+end)
+
+local actionSec = PlayerTab:CreateGroup({ Title = "Actions" })
+actionSec:CreateButton({ Title = "RESET CHARACTER", Variant = "Outline", Callback = function()
+	local hum = getHumanoid() if hum then hum.Health = 0 end
+end })
+actionSec:CreateButton({ Title = "RESET STATS", Variant = "Secondary", Callback = function()
+	local hum = getHumanoid()
+	if hum then hum.WalkSpeed = 16 hum.JumpPower = 50 end
+	Galaxy:Notify({ Type = "Info", Title = "Player", Content = "Stats reset to default." })
+end })
+
+--========================================================
+-- SETTINGS TAB
+--========================================================
+local Settings = Window:CreateTab("Settings", TAB_ICONS.Settings)
+
+local cfgSec = Settings:CreateGroup({ Title = "Interface" })
+cfgSec:CreateToggle({ Title = "Background Stars", Default = true })
+cfgSec:CreateToggle({ Title = "Notifications", Default = true })
+cfgSec:CreateFrame({ Title = "About Galaxy UI", Content = "A clean, animated, Rayfield-style library built for developers.", ButtonText = "DISCORD" })
+
+local statusSec = Settings:CreateGroup({ Title = "Status" })
+local loadBar = statusSec:CreateProgressBar({ Title = "Loading", Value = 0 })
+task.spawn(function()
+	for i = 0, 100, 4 do loadBar.Set(i) task.wait(0.04) end
+end)
+statusSec:CreateLoadingIndicator()
+
+-- NOTIFICATIONS (top-right)
+Galaxy:Notify({ Type = "Success", Title = "Success", Content = "Operation completed!" })
+Galaxy:Notify({ Type = "Info",    Title = "Info",    Content = "This is an info message." })
+Galaxy:Notify({ Type = "Warning", Title = "Warning", Content = "This is a warning!" })
+Galaxy:Notify({ Type = "Error",   Title = "Error",   Content = "Something went wrong." })
+
+end
+
+-- Show the key system FIRST. The interface is built only after the correct key.
+Galaxy:CreateKeySystem({
+	Title = "GALAXY UI",
+	Subtitle = "KEY SYSTEM",
+	Note = "Enter your key to continue.",
+	Key = "x_375",
+	Link = "https://discord.gg/your-invite",
+	OnSuccess = buildUI,
+})
