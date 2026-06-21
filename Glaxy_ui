@@ -22,11 +22,11 @@ local GateState = { locked = false }  -- true while a key system gates the UI (d
 -- ASSETS  (paste your uploaded image IDs here)
 --========================================================
 local ASSETS = {
-	GalaxySpiral = "rbxassetid://87749449322907", -- spiral galaxy (logo, profile, frames, tab bg)
-	HeaderGalaxy = "rbxassetid://87749449322907", -- wide galaxy glow for the header
-	StarTexture  = "rbxassetid://87749449322907", -- optional star/noise overlay
-	MiniIcon     = "rbxassetid://87749449322907", -- floating mini launcher button icon
-	Background   = "rbxassetid://0", -- optional full-window background image
+	GalaxySpiral = "rbxassetid://11878291121", -- spiral galaxy (logo, profile, frames, tab bg)
+	HeaderGalaxy = "rbxassetid://0", -- wide galaxy glow for the header
+	StarTexture  = "rbxassetid://75399697853679", -- optional star/noise overlay
+	MiniIcon     = "rbxassetid://11878291121", -- floating mini launcher button icon
+	Background   = "rbxassetid://11878291121", -- optional full-window background image
 }
 
 -- Sidebar icons (white line icons). Leave at 0 to draw a small circle instead.
@@ -272,11 +272,29 @@ local function getScreenGui()
 	if GalaxyUI._activeGui and GalaxyUI._activeGui.Parent then
 		return GalaxyUI._activeGui
 	end
-	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	-- Pick the highest-priority host so the UI stays ON TOP of everything,
+	-- including the Roblox ESC / settings menu. gethui()/CoreGui render above
+	-- the core menu; PlayerGui is only used as a last-resort fallback.
+	local parentGui
+	pcall(function()
+		if typeof(gethui) == "function" then parentGui = gethui() end
+	end)
+	if not parentGui then
+		pcall(function()
+			if typeof(get_hidden_gui) == "function" then parentGui = get_hidden_gui() end
+		end)
+	end
+	if not parentGui then
+		pcall(function() parentGui = game:GetService("CoreGui") end)
+	end
+	if not parentGui then
+		parentGui = LocalPlayer:FindFirstChild("PlayerGui")
+			or LocalPlayer:WaitForChild("PlayerGui")
+	end
 	-- ALREADY LOADED? remove any GalaxyUI left over from a previous execution so
 	-- we never stack a duplicate UI on top of the old one (re-run = refresh).
-	if pg then
-		for _, gui in ipairs(pg:GetChildren()) do
+	if parentGui then
+		for _, gui in ipairs(parentGui:GetChildren()) do
 			if gui:IsA("ScreenGui") and gui.Name == "GalaxyUI" then gui:Destroy() end
 		end
 	end
@@ -285,8 +303,13 @@ local function getScreenGui()
 		ResetOnSpawn = false,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		IgnoreGuiInset = true,
-		Parent = pg,
+		DisplayOrder = 2147483647, -- max: render above the ESC menu and other GUIs
+		Parent = parentGui,
 	})
+	-- protect the GUI from anti-cheat detaching it (Synapse-style executors)
+	pcall(function()
+		if syn and syn.protect_gui then syn.protect_gui(GalaxyUI._activeGui) end
+	end)
 	return GalaxyUI._activeGui
 end
 
@@ -424,7 +447,7 @@ function GalaxyUI:CreateKeySystem(opts)
 	local link     = opts.Link
 
 	local sg = getScreenGui()
-	sg.DisplayOrder = 1000
+	sg.DisplayOrder = 2147483647
 
 	-- dim backdrop (blocks the UI behind until a key is accepted)
 	local backdrop = new("Frame", {
