@@ -1,13 +1,17 @@
 --[[
-	Galaxy UI — a Rayfield-style Roblox UI library
-	Black starfield theme, white accent. Self-contained single file.
+	NEXO UI Library — a self-contained Roblox UI library
+	Black starfield theme, white accent. Single file, paste-and-run (executor or LocalScript).
 
 	Basic usage:
-		local Galaxy = loadstring(...)()   -- or require(this module)
-		local Window = Galaxy:CreateWindow({ Title = "GALAXY UI", SubTitle = "UI LIBRARY", Tagline = "Built for developers." })
+		local Nexo = loadstring(...)()   -- or require(this module)
+		local Window = Nexo:CreateWindow({ Title = "NEXO UI", SubTitle = "UI LIBRARY", Tagline = "Built for developers." })
 		local Home = Window:CreateTab("Home", ICONS.Home)
 		local g = Home:CreateGroup({ Title = "BUTTONS" })
 		g:CreateButton({ Title = "PRIMARY BUTTON", Variant = "Primary", Callback = function() end })
+
+	New in this build: CreateSection, CreateDivider, CreateParagraph, CreateColorPicker,
+	configuration saving (per-element Flag + Window:SaveConfiguration / LoadConfiguration),
+	and Window:SetVisibility / IsVisible / Destroy.
 ]]
 
 local Players = game:GetService("Players")
@@ -22,11 +26,11 @@ local GateState = { locked = false }  -- true while a key system gates the UI (d
 -- ASSETS  (paste your uploaded image IDs here)
 --========================================================
 local ASSETS = {
-	GalaxySpiral = "rbxassetid://87749449322907", -- spiral galaxy (logo, profile, frames, tab bg)
-	HeaderGalaxy = "rbxassetid://87749449322907", -- wide galaxy glow for the header
-	StarTexture  = "rbxassetid://87749449322907", -- optional star/noise overlay
-	MiniIcon     = "rbxassetid://87749449322907", -- floating mini launcher button icon
-	Background   = "rbxassetid://87749449322907", -- optional full-window background image
+	GalaxySpiral = "rbxassetid://11878291121", -- spiral galaxy (logo, profile, frames, tab bg)
+	HeaderGalaxy = "rbxassetid://0", -- wide galaxy glow for the header
+	StarTexture  = "rbxassetid://75399697853679", -- optional star/noise overlay
+	MiniIcon     = "rbxassetid://11878291121", -- floating mini launcher button icon
+	Background   = "rbxassetid://11878291121", -- optional full-window background image
 }
 
 -- Sidebar icons (white line icons). Leave at 0 to draw a small circle instead.
@@ -172,6 +176,80 @@ local function makeDraggable(frame, handle)
 	end
 end
 
+-- ============================================================
+-- CONFIGURATION SAVING (Flags) — ported feature, NEXO style
+-- ============================================================
+local SaveManager = {
+	Enabled = false,
+	Folder = "NexoUI",
+	FileName = "config",
+	Binds = {},
+}
+local function _smPath()
+	return SaveManager.Folder .. "/" .. SaveManager.FileName .. ".json"
+end
+function SaveManager:Bind(flag, handle, kind)
+	if not flag then return end
+	self.Binds[flag] = { handle = handle, kind = kind or "value" }
+end
+function SaveManager:Save()
+	if not self.Enabled then return end
+	local data = {}
+	for flag, b in pairs(self.Binds) do
+		local ok, val = pcall(function() return b.handle.Get() end)
+		if ok then
+			if b.kind == "color" and typeof(val) == "Color3" then
+				data[flag] = string.format("#%02X%02X%02X", math.floor(val.R*255+0.5), math.floor(val.G*255+0.5), math.floor(val.B*255+0.5))
+			elseif b.kind == "range" then
+				local lo, hi = b.handle.Get()
+				data[flag] = { lo, hi }
+			else
+				data[flag] = val
+			end
+		end
+	end
+	pcall(function()
+		if typeof(makefolder) == "function" and typeof(isfolder) == "function" and not isfolder(self.Folder) then
+			makefolder(self.Folder)
+		end
+		if typeof(writefile) == "function" then
+			writefile(_smPath(), game:GetService("HttpService"):JSONEncode(data))
+		end
+	end)
+end
+function SaveManager:Mark(flag)
+	if self.Enabled then self:Save() end
+end
+function SaveManager:Load()
+	if not self.Enabled then return end
+	local content
+	pcall(function()
+		if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(_smPath()) then
+			content = readfile(_smPath())
+		end
+	end)
+	if not content then return end
+	local ok, data = pcall(function() return game:GetService("HttpService"):JSONDecode(content) end)
+	if not ok or type(data) ~= "table" then return end
+	for flag, val in pairs(data) do
+		local b = self.Binds[flag]
+		if b and b.handle and b.handle.Set then
+			pcall(function()
+				if b.kind == "color" and type(val) == "string" then
+					local r = tonumber(string.sub(val,2,3),16) or 255
+					local g = tonumber(string.sub(val,4,5),16) or 255
+					local bl = tonumber(string.sub(val,6,7),16) or 255
+					b.handle.Set(Color3.fromRGB(r, g, bl))
+				elseif b.kind == "range" and type(val) == "table" then
+					b.handle.Set(val[1], val[2])
+				else
+					b.handle.Set(val)
+				end
+			end)
+		end
+	end
+end
+
 --========================================================
 -- STARFIELD (procedural galaxy background)
 --========================================================
@@ -264,13 +342,13 @@ end
 --========================================================
 -- ROOT
 --========================================================
-local GalaxyUI = {}
-GalaxyUI.__index = GalaxyUI
+local NexoUI = {}
+NexoUI.__index = NexoUI
 
 local function getScreenGui()
 	-- reuse one ScreenGui for this run (the key system + window share it)
-	if GalaxyUI._activeGui and GalaxyUI._activeGui.Parent then
-		return GalaxyUI._activeGui
+	if NexoUI._activeGui and NexoUI._activeGui.Parent then
+		return NexoUI._activeGui
 	end
 	-- Pick the highest-priority host so the UI stays ON TOP of everything,
 	-- including the Roblox ESC / settings menu. gethui()/CoreGui render above
@@ -291,15 +369,15 @@ local function getScreenGui()
 		parentGui = LocalPlayer:FindFirstChild("PlayerGui")
 			or LocalPlayer:WaitForChild("PlayerGui")
 	end
-	-- ALREADY LOADED? remove any GalaxyUI left over from a previous execution so
+	-- ALREADY LOADED? remove any NexoUI left over from a previous execution so
 	-- we never stack a duplicate UI on top of the old one (re-run = refresh).
 	if parentGui then
 		for _, gui in ipairs(parentGui:GetChildren()) do
-			if gui:IsA("ScreenGui") and gui.Name == "GalaxyUI" then gui:Destroy() end
+			if gui:IsA("ScreenGui") and gui.Name == "NexoUI" then gui:Destroy() end
 		end
 	end
-	GalaxyUI._activeGui = new("ScreenGui", {
-		Name = "GalaxyUI",
+	NexoUI._activeGui = new("ScreenGui", {
+		Name = "NexoUI",
 		ResetOnSpawn = false,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		IgnoreGuiInset = true,
@@ -308,27 +386,37 @@ local function getScreenGui()
 	})
 	-- protect the GUI from anti-cheat detaching it (Synapse-style executors)
 	pcall(function()
-		if syn and syn.protect_gui then syn.protect_gui(GalaxyUI._activeGui) end
+		if syn and syn.protect_gui then syn.protect_gui(NexoUI._activeGui) end
 	end)
-	return GalaxyUI._activeGui
+	return NexoUI._activeGui
 end
 
 --========================================================
 -- NOTIFICATIONS
 --========================================================
 local NOTIFY_STYLES = {
-	Success = { color = Theme.Success, glyph = "\u{2713}" },
+	Success = { color = Theme.Success, glyph = "✓" },
 	Info    = { color = Theme.Info,    glyph = "i" },
 	Warning = { color = Theme.Warning, glyph = "!" },
-	Error   = { color = Theme.Error,   glyph = "\u{2715}" },
+	Error   = { color = Theme.Error,   glyph = "✕" },
 }
 
-function GalaxyUI:Notify(opts)
+function NexoUI:Notify(opts)
 	opts = opts or {}
 	local style = NOTIFY_STYLES[opts.Type or "Info"] or NOTIFY_STYLES.Info
 	local title = opts.Title or "Notification"
 	local content = opts.Content or ""
 	local duration = opts.Duration or 4
+	-- BUGFIX: allow Notify() before CreateWindow() by lazily building a holder
+	if not self._notifyHolder then
+		local _sg = getScreenGui()
+		self._notifyHolder = new("Frame", {
+			Name = "Notifications", AnchorPoint = Vector2.new(1,0),
+			Position = UDim2.new(1, -16, 0, 16), Size = UDim2.new(0, 280, 1, -32),
+			BackgroundTransparency = 1, ZIndex = 50, Parent = _sg,
+		})
+		vlist(self._notifyHolder, 10, Enum.HorizontalAlignment.Right)
+	end
 
 	local card = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 56),
@@ -437,9 +525,9 @@ end
 --========================================================
 -- KEY SYSTEM (galaxy-styled gate screen)
 --========================================================
-function GalaxyUI:CreateKeySystem(opts)
+function NexoUI:CreateKeySystem(opts)
 	opts = opts or {}
-	local title    = opts.Title or "GALAXY UI"
+	local title    = opts.Title or "NEXO UI"
 	local subtitle = opts.Subtitle or "KEY SYSTEM"
 	local note     = opts.Note or "Enter your key to continue."
 	local keys     = opts.Key or opts.Keys or {}
@@ -809,7 +897,7 @@ local function buildElements(container, lib)
 		elseif variant == "Icon" then
 			btn.BackgroundColor3 = Color3.fromRGB(0, 0, 0) btn.BackgroundTransparency = 0.5
 			btn.TextColor3 = Theme.Text
-			btn.Text = (opts.Glyph or "\u{2605}") .. "   " .. (opts.Title or "")
+			btn.Text = (opts.Glyph or "★") .. "   " .. (opts.Title or "")
 			stroke(btn, Theme.Stroke, 1)
 		else -- Secondary
 			btn.BackgroundColor3 = Color3.fromRGB(0, 0, 0) btn.BackgroundTransparency = 0.5
@@ -876,7 +964,7 @@ local function buildElements(container, lib)
 				Position = UDim2.new(1, 0, 0.5, 0),
 				Size = UDim2.new(0, 20, 0, 20),
 				BackgroundTransparency = 1,
-				Font = FONT, Text = "\u{1F441}", TextColor3 = Theme.SubText, TextSize = 13,
+				Font = FONT, Text = "👁", TextColor3 = Theme.SubText, TextSize = 13,
 				Parent = row,
 			})
 			box:GetPropertyChangedSignal("Text"):Connect(function()
@@ -895,7 +983,10 @@ local function buildElements(container, lib)
 			end)
 			box.FocusLost:Connect(function(enter) if opts.Callback then opts.Callback(real, enter) end end)
 		else
-			box.FocusLost:Connect(function(enter) if opts.Callback then opts.Callback(box.Text, enter) end end)
+			box.FocusLost:Connect(function(enter) if opts.Callback then opts.Callback(box.Text, enter) end if opts.Flag then SaveManager:Mark(opts.Flag) end end)
+		end
+		if opts.Flag then
+			SaveManager:Bind(opts.Flag, { Get = function() return box.Text end, Set = function(v) box.Text = tostring(v or "") if opts.Callback then opts.Callback(box.Text, false) end end }, "value")
 		end
 		return box
 	end
@@ -940,9 +1031,12 @@ local function buildElements(container, lib)
 				BackgroundColor3 = state and Color3.fromRGB(10,10,12) or Color3.fromRGB(200,200,210),
 			})
 			if opts.Callback then opts.Callback(state) end
+			if opts.Flag then SaveManager:Mark(opts.Flag) end
 		end
 		pill.MouseButton1Click:Connect(function() set(not state) end)
-		return { Set = set, Get = function() return state end }
+		local _h = { Set = set, Get = function() return state end }
+		if opts.Flag then SaveManager:Bind(opts.Flag, _h, "value") end
+		return _h
 	end
 
 	function E:CreateSlider(opts)
@@ -982,6 +1076,7 @@ local function buildElements(container, lib)
 			knob.Position = UDim2.new(rel, 0, 0.5, 0)
 			valLbl.Text = value .. suffix
 			if opts.Callback then opts.Callback(value) end
+			if opts.Flag then SaveManager:Mark(opts.Flag) end
 		end
 		track.InputBegan:Connect(function(i)
 			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -994,7 +1089,19 @@ local function buildElements(container, lib)
 		UserInputService.InputEnded:Connect(function(i)
 			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
 		end)
-		return { Get = function() return value end }
+		local function setValue(nv)
+			nv = math.clamp(math.floor((tonumber(nv) or value) + 0.5), min, max)
+			local rel = (nv - min) / (max - min)
+			value = nv
+			fill.Size = UDim2.new(rel, 0, 1, 0)
+			knob.Position = UDim2.new(rel, 0, 0.5, 0)
+			valLbl.Text = value .. suffix
+			if opts.Callback then opts.Callback(value) end
+			if opts.Flag then SaveManager:Mark(opts.Flag) end
+		end
+		local _h = { Get = function() return value end, Set = setValue }
+		if opts.Flag then SaveManager:Bind(opts.Flag, _h, "value") end
+		return _h
 	end
 
 	function E:CreateRangeSlider(opts)
@@ -1024,6 +1131,7 @@ local function buildElements(container, lib)
 			fill.Size = UDim2.new(relOf(hi)-relOf(lo), 0, 1, 0)
 			valLbl.Text = lo..suffix.." - "..hi..suffix
 			if opts.Callback then opts.Callback(lo, hi) end
+			if opts.Flag then SaveManager:Mark(opts.Flag) end
 		end
 		local function makeKnob(getter)
 			local k = new("Frame", { AnchorPoint = Vector2.new(0.5,0.5), Position = UDim2.new(relOf(getter()),0,0.5,0),
@@ -1054,7 +1162,17 @@ local function buildElements(container, lib)
 		UserInputService.InputEnded:Connect(function(i)
 			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = nil end
 		end)
-		return { Get = function() return lo, hi end }
+		local function setRange(a, b)
+			lo = math.clamp(math.floor((tonumber(a) or lo) + 0.5), min, max)
+			hi = math.clamp(math.floor((tonumber(b) or hi) + 0.5), min, max)
+			if lo > hi then lo, hi = hi, lo end
+			kLo.Position = UDim2.new(relOf(lo), 0, 0.5, 0)
+			kHi.Position = UDim2.new(relOf(hi), 0, 0.5, 0)
+			redraw()
+		end
+		local _h = { Get = function() return lo, hi end, Set = setRange }
+		if opts.Flag then SaveManager:Bind(opts.Flag, _h, "range") end
+		return _h
 	end
 
 	function E:CreateDropdown(opts)
@@ -1083,6 +1201,7 @@ local function buildElements(container, lib)
 			item.MouseButton1Click:Connect(function()
 				current = opt selLbl.Text = opt selLbl.TextColor3 = Theme.Text
 				if opts.Callback then opts.Callback(opt) end
+				if opts.Flag then SaveManager:Mark(opts.Flag) end
 			end)
 		end
 		head.MouseButton1Click:Connect(function()
@@ -1090,7 +1209,10 @@ local function buildElements(container, lib)
 			local h = open and (42 + (#options * 28) + 4) or 38
 			tween(row, 0.18, { Size = UDim2.new(1, 0, 0, h) })
 		end)
-		return { Get = function() return current end, Set = function(v) current = v selLbl.Text = v selLbl.TextColor3 = Theme.Text end }
+		local _h
+		_h = { Get = function() return current end, Set = function(v) current = v selLbl.Text = v selLbl.TextColor3 = (v and Theme.Text or Theme.SubText) if opts.Callback then opts.Callback(v) end end }
+		if opts.Flag then SaveManager:Bind(opts.Flag, _h, "value") end
+		return _h
 	end
 
 	function E:CreateKeybind(opts)
@@ -1222,16 +1344,221 @@ local function buildElements(container, lib)
 		return frame
 	end
 
+	-- Section header (inline label)
+	function E:CreateSection(text)
+		local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, Parent = container })
+		local lbl = new("TextLabel", {
+			Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+			Font = FONT_BOLD, Text = string.upper(tostring(text or "Section")),
+			TextColor3 = Theme.SubText, TextSize = 12, TextTransparency = 1,
+			TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+		})
+		tween(lbl, 0.4, { TextTransparency = 0.3 })
+		return { Set = function(t) lbl.Text = string.upper(tostring(t or "")) end }
+	end
+
+	-- Divider (horizontal line)
+	function E:CreateDivider()
+		local d = new("Frame", {
+			Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Theme.StrokeLight,
+			BorderSizePixel = 0, BackgroundTransparency = 1, Parent = container,
+		})
+		tween(d, 0.4, { BackgroundTransparency = 0.2 })
+		return { Set = function(v) d.Visible = v and true or false end }
+	end
+
+	-- Paragraph (title + body text card)
+	function E:CreateParagraph(opts)
+		opts = opts or {}
+		local frame = new("Frame", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundColor3 = Theme.Element, BackgroundTransparency = 0.5, Parent = container,
+		})
+		corner(8, frame)
+		stroke(frame, Theme.Stroke, 1)
+		pad(frame, 12, 12, 14, 14)
+		vlist(frame, 6)
+		local titleLbl = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+			Font = FONT_BOLD, Text = opts.Title or "Title", TextColor3 = Theme.Text, TextSize = 14,
+			TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, Parent = frame,
+		})
+		local bodyLbl = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+			Font = FONT, Text = opts.Content or "", TextColor3 = Theme.SubText, TextSize = 12,
+			TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = frame,
+		})
+		return { Set = function(o) o = o or {} if o.Title then titleLbl.Text = o.Title end if o.Content then bodyLbl.Text = o.Content end end }
+	end
+
+	-- Color picker (HSV square + hue slider + hex), NEXO black/white style
+	function E:CreateColorPicker(opts)
+		opts = opts or {}
+		local color = opts.Default or opts.Color or Color3.fromRGB(255, 255, 255)
+		local h, s, v = color:ToHSV()
+		local open = false
+		local row = baseRow(38)
+		row.ClipsDescendants = true
+		new("TextLabel", {
+			Size = UDim2.new(1, -52, 0, 38), BackgroundTransparency = 1,
+			Font = FONT, Text = opts.Title or "Color Picker", TextColor3 = Theme.Text, TextSize = 13,
+			TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+		})
+		local swatch = new("TextButton", {
+			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 8),
+			Size = UDim2.new(0, 40, 0, 22), BackgroundColor3 = color, AutoButtonColor = false, Text = "", Parent = row,
+		})
+		corner(6, swatch)
+		stroke(swatch, Theme.StrokeLight, 1)
+		local canvas = new("Frame", {
+			Position = UDim2.new(0, 0, 0, 46), Size = UDim2.new(1, 0, 0, 90),
+			BackgroundColor3 = Color3.fromHSV(h, 1, 1), BorderSizePixel = 0, Parent = row,
+		})
+		corner(8, canvas)
+		canvas.ClipsDescendants = true
+		local whiteOv = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(255,255,255), BorderSizePixel = 0, Parent = canvas })
+		corner(8, whiteOv)
+		new("UIGradient", {
+			Color = ColorSequence.new(Color3.fromRGB(255,255,255)),
+			Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+			Parent = whiteOv,
+		})
+		local blackOv = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(0,0,0), BorderSizePixel = 0, Parent = canvas })
+		corner(8, blackOv)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new(Color3.fromRGB(0,0,0)),
+			Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) }),
+			Parent = blackOv,
+		})
+		local svPoint = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0, 10, 0, 10),
+			BackgroundColor3 = Color3.fromRGB(255,255,255), Parent = canvas,
+		})
+		corner(5, svPoint)
+		stroke(svPoint, Color3.fromRGB(0,0,0), 1)
+		local hue = new("Frame", {
+			Position = UDim2.new(0, 0, 0, 142), Size = UDim2.new(1, 0, 0, 12),
+			BackgroundColor3 = Color3.fromRGB(255,255,255), BorderSizePixel = 0, Parent = row,
+		})
+		corner(6, hue)
+		new("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 0, 0)),
+				ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+				ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
+				ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0, 255, 255)),
+				ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
+				ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
+				ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 0, 0)),
+			}),
+			Parent = hue,
+		})
+		local huePoint = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(h, 0, 0.5, 0),
+			Size = UDim2.new(0, 6, 0, 16), BackgroundColor3 = Color3.fromRGB(255,255,255), Parent = hue,
+		})
+		corner(3, huePoint)
+		stroke(huePoint, Color3.fromRGB(0,0,0), 1)
+		local hexRow = new("Frame", {
+			Position = UDim2.new(0, 0, 0, 162), Size = UDim2.new(1, 0, 0, 28),
+			BackgroundColor3 = Theme.PanelLight, Parent = row,
+		})
+		corner(6, hexRow)
+		stroke(hexRow, Theme.Stroke, 1)
+		pad(hexRow, 0, 0, 10, 10)
+		local hexBox = new("TextBox", {
+			Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = FONT,
+			Text = "", PlaceholderText = "#FFFFFF", PlaceholderColor3 = Theme.SubText, TextColor3 = Theme.Text,
+			TextSize = 12, ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left, Parent = hexRow,
+		})
+		local function currentColor() return Color3.fromHSV(h, s, v) end
+		local function refresh(fireCb)
+			local c = currentColor()
+			swatch.BackgroundColor3 = c
+			canvas.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+			svPoint.Position = UDim2.new(s, 0, 1 - v, 0)
+			svPoint.BackgroundColor3 = c
+			huePoint.Position = UDim2.new(h, 0, 0.5, 0)
+			hexBox.Text = string.format("#%02X%02X%02X", math.floor(c.R*255+0.5), math.floor(c.G*255+0.5), math.floor(c.B*255+0.5))
+			if fireCb and opts.Callback then opts.Callback(c) end
+			if fireCb and opts.Flag then SaveManager:Mark(opts.Flag) end
+		end
+		refresh(false)
+		swatch.MouseButton1Click:Connect(function()
+			open = not open
+			tween(row, 0.18, { Size = UDim2.new(1, 0, 0, open and 200 or 38) })
+		end)
+		local svDrag, hueDrag = false, false
+		local function updateSV(px, py)
+			local rx = math.clamp((px - canvas.AbsolutePosition.X) / math.max(canvas.AbsoluteSize.X, 1), 0, 1)
+			local ry = math.clamp((py - canvas.AbsolutePosition.Y) / math.max(canvas.AbsoluteSize.Y, 1), 0, 1)
+			s = rx
+			v = 1 - ry
+			refresh(true)
+		end
+		local function updateHue(px)
+			h = math.clamp((px - hue.AbsolutePosition.X) / math.max(hue.AbsoluteSize.X, 1), 0, 1)
+			refresh(true)
+		end
+		canvas.InputBegan:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+				svDrag = true updateSV(i.Position.X, i.Position.Y)
+			end
+		end)
+		hue.InputBegan:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+				hueDrag = true updateHue(i.Position.X)
+			end
+		end)
+		UserInputService.InputChanged:Connect(function(i)
+			if not row.Parent then return end
+			if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+				if svDrag then updateSV(i.Position.X, i.Position.Y) elseif hueDrag then updateHue(i.Position.X) end
+			end
+		end)
+		UserInputService.InputEnded:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+				svDrag = false hueDrag = false
+			end
+		end)
+		hexBox.FocusLost:Connect(function()
+			local t = string.gsub(hexBox.Text, "#", "")
+			if #t >= 6 then
+				local r = tonumber(string.sub(t,1,2), 16)
+				local g = tonumber(string.sub(t,3,4), 16)
+				local b = tonumber(string.sub(t,5,6), 16)
+				if r and g and b then
+					h, s, v = Color3.fromRGB(r, g, b):ToHSV()
+					refresh(true)
+				else refresh(false) end
+			else refresh(false) end
+		end)
+		local handle = {
+			Get = function() return currentColor() end,
+			Set = function(c)
+				if typeof(c) == "Color3" then h, s, v = c:ToHSV() refresh(true) end
+			end,
+		}
+		if opts.Flag then SaveManager:Bind(opts.Flag, handle, "color") end
+		return handle
+	end
+
 	return E
 end
 
 --========================================================
 -- WINDOW
 --========================================================
-function GalaxyUI:CreateWindow(opts)
+function NexoUI:CreateWindow(opts)
 	opts = opts or {}
 	local sg = getScreenGui()
 	self._sg = sg
+	if opts.ConfigurationSaving and opts.ConfigurationSaving.Enabled then
+		SaveManager.Enabled = true
+		if opts.ConfigurationSaving.FolderName then SaveManager.Folder = opts.ConfigurationSaving.FolderName end
+		if opts.ConfigurationSaving.FileName then SaveManager.FileName = opts.ConfigurationSaving.FileName end
+	end
 
 	-- notifications holder (top-right, like reference)
 	self._notifyHolder = new("Frame", {
@@ -1303,7 +1630,7 @@ function GalaxyUI:CreateWindow(opts)
 	-- thin divider under the header so the top bar reads cleanly
 	local headerDivider = new("Frame", { Position = UDim2.new(0, 16, 0, 72), Size = UDim2.new(1, -32, 0, 1),
 		BackgroundColor3 = Theme.Stroke, BorderSizePixel = 0, ZIndex = 3, Parent = main })
-	-- TOP BAR: [logo]  GALAXY UI  |  tagline ......  (minimize / close on the right)
+	-- TOP BAR: [logo]  NEXO UI  |  tagline ......  (minimize / close on the right)
 	local headBar = new("Frame", { Position = UDim2.new(0, 16, 0, 0), Size = UDim2.new(1, -100, 1, 0),
 		BackgroundTransparency = 1, ZIndex = 2, Parent = header })
 	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
@@ -1314,7 +1641,7 @@ function GalaxyUI:CreateWindow(opts)
 		corner(30, logoImg)
 	end
 	new("TextLabel", { AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1,
-		Font = FONT_BOLD, Text = string.upper(opts.Title or "GALAXY UI"), TextColor3 = Theme.Text, TextSize = 26,
+		Font = FONT_BOLD, Text = string.upper(opts.Title or "NEXO UI"), TextColor3 = Theme.Text, TextSize = 26,
 		TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, ZIndex = 2, Parent = headBar })
 	if opts.Tagline then
 		-- thin vertical line between the title and the tagline
@@ -1342,7 +1669,7 @@ function GalaxyUI:CreateWindow(opts)
 		b.MouseLeave:Connect(function() tween(b, 0.1, { TextColor3 = Theme.SubText }) end)
 		return b
 	end
-	local minBtn, closeBtn = ctrl("\u{2014}"), ctrl("X")
+	local minBtn, closeBtn = ctrl("—"), ctrl("X")
 	minBtn.MouseButton1Click:Connect(function()
 		minimized = not minimized
 		if doMinimize then doMinimize(minimized) end
@@ -1382,7 +1709,7 @@ function GalaxyUI:CreateWindow(opts)
 		avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150"
 	end
 	new("TextLabel", { Position = UDim2.new(0,50,0,8), Size = UDim2.new(1,-58,0,16), BackgroundTransparency = 1,
-		Font = FONT_BOLD, Text = displayName .. "  \u{2713}", TextColor3 = Theme.Text, TextSize = 13,
+		Font = FONT_BOLD, Text = displayName .. "  ✓", TextColor3 = Theme.Text, TextSize = 13,
 		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2, Parent = profile })
 	new("TextLabel", { Position = UDim2.new(0,50,0,26), Size = UDim2.new(1,-58,0,14), BackgroundTransparency = 1,
 		Font = FONT, Text = "@" .. userName, TextColor3 = Theme.SubText, TextSize = 11,
@@ -1625,7 +1952,7 @@ function GalaxyUI:CreateWindow(opts)
 		main.Visible = false
 		mini.Visible = false
 		self:CreateKeySystem({
-			Title = ks.Title or opts.Title or "GALAXY UI",
+			Title = ks.Title or opts.Title or "NEXO UI",
 			Subtitle = ks.Subtitle or "KEY SYSTEM",
 			Note = ks.Note or "Enter your key to continue.",
 			Key = ks.Key or ks.Keys,
@@ -1640,7 +1967,24 @@ function GalaxyUI:CreateWindow(opts)
 		})
 	end
 
+	function Window:SetVisibility(state) setMainOpen(state and true or false) end
+	function Window:IsVisible() return windowOpen end
+	function Window:SaveConfiguration() SaveManager:Save() end
+	function Window:LoadConfiguration() SaveManager:Load() end
+	function Window:Destroy()
+		pcall(function()
+			if NexoUI._activeGui then NexoUI._activeGui:Destroy() NexoUI._activeGui = nil end
+		end)
+	end
+	if SaveManager.Enabled then task.defer(function() SaveManager:Load() end) end
+
 	return Window
 end
 
-return setmetatable({}, GalaxyUI)
+function NexoUI:Destroy()
+	pcall(function()
+		if NexoUI._activeGui then NexoUI._activeGui:Destroy() NexoUI._activeGui = nil end
+	end)
+end
+
+return setmetatable({}, NexoUI)
