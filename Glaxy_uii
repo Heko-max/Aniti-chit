@@ -30,11 +30,11 @@ local GateState = { locked = false }  -- true while a key system gates the UI (d
 --   NexoUI:SetAssets({ MiniIcon = 123, Background = 456 })  -- many at once
 -- Valid asset names: GalaxySpiral, HeaderGalaxy, StarTexture, MiniIcon, Background
 local ASSETS = {
-	GalaxySpiral = "rbxassetid://0", -- main image (logo, profile, frames, tab bg)
-	HeaderGalaxy = "rbxassetid://0", -- wide glow for the header
-	StarTexture  = "rbxassetid://0", -- optional star/noise overlay
-	MiniIcon     = "rbxassetid://0", -- floating mini launcher button icon
-	Background   = "rbxassetid://0", -- optional full-window background image
+	GalaxySpiral = "rbxassetid://87749449322907", -- main image (logo, profile, frames, tab bg)
+	HeaderGalaxy = "rbxassetid://87749449322907", -- wide glow for the header
+	StarTexture  = "rbxassetid://87749449322907", -- optional star/noise overlay
+	MiniIcon     = "rbxassetid://87749449322907", -- floating mini launcher button icon
+	Background   = "rbxassetid://73043923478533", -- optional full-window background image
 }
 
 -- Sidebar icons (white line icons). Leave at 0 to draw a small circle instead.
