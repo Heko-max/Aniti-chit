@@ -22,10 +22,10 @@ local GateState = { locked = false }  -- true while a key system gates the UI (d
 -- ASSETS  (paste your uploaded image IDs here)
 --========================================================
 local ASSETS = {
-	GalaxySpiral = "rbxassetid://11878291121", -- spiral galaxy (logo, profile, frames, tab bg)
+	GalaxySpiral = "rbxassetid://87749449322907", -- spiral galaxy (logo, profile, frames, tab bg)
 	HeaderGalaxy = "rbxassetid://0", -- wide galaxy glow for the header
-	StarTexture  = "rbxassetid://75399697853679", -- optional star/noise overlay
-	MiniIcon     = "rbxassetid://11878291121", -- floating mini launcher button icon
+	StarTexture  = "rbxassetid://87749449322907", -- optional star/noise overlay
+	MiniIcon     = "rbxassetid://87749449322907", -- floating mini launcher button icon
 	Background   = "rbxassetid://11878291121", -- optional full-window background image
 }
 
