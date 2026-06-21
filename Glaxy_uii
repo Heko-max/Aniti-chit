@@ -25,12 +25,16 @@ local GateState = { locked = false }  -- true while a key system gates the UI (d
 --========================================================
 -- ASSETS  (paste your uploaded image IDs here)
 --========================================================
+-- All image IDs are EMPTY by default. Set them with commands BEFORE CreateWindow:
+--   NexoUI:SetAsset("GalaxySpiral", 123456789)        -- single asset (number or "rbxassetid://123")
+--   NexoUI:SetAssets({ MiniIcon = 123, Background = 456 })  -- many at once
+-- Valid asset names: GalaxySpiral, HeaderGalaxy, StarTexture, MiniIcon, Background
 local ASSETS = {
-	GalaxySpiral = "rbxassetid://11878291121", -- spiral galaxy (logo, profile, frames, tab bg)
-	HeaderGalaxy = "rbxassetid://0", -- wide galaxy glow for the header
-	StarTexture  = "rbxassetid://75399697853679", -- optional star/noise overlay
-	MiniIcon     = "rbxassetid://11878291121", -- floating mini launcher button icon
-	Background   = "rbxassetid://11878291121", -- optional full-window background image
+	GalaxySpiral = "rbxassetid://0", -- main image (logo, profile, frames, tab bg)
+	HeaderGalaxy = "rbxassetid://0", -- wide glow for the header
+	StarTexture  = "rbxassetid://0", -- optional star/noise overlay
+	MiniIcon     = "rbxassetid://0", -- floating mini launcher button icon
+	Background   = "rbxassetid://0", -- optional full-window background image
 }
 
 -- Sidebar icons (white line icons). Leave at 0 to draw a small circle instead.
@@ -50,6 +54,17 @@ local ICONS = {
 
 local function hasAsset(id)
 	return id and id ~= "rbxassetid://0" and id ~= "" and id ~= 0
+end
+
+-- Accepts a number (12345), a numeric string ("12345"), or a full string
+-- ("rbxassetid://123", "rbxthumb://...", "http...") and returns a usable image id.
+local function _normalizeAssetId(id)
+	if id == nil then return "rbxassetid://0" end
+	if type(id) == "number" then return "rbxassetid://" .. id end
+	id = tostring(id)
+	if id == "" then return "rbxassetid://0" end
+	if string.match(id, "^%d+$") then return "rbxassetid://" .. id end
+	return id
 end
 
 --========================================================
@@ -344,6 +359,41 @@ end
 --========================================================
 local NexoUI = {}
 NexoUI.__index = NexoUI
+
+--========================================================
+-- IMAGE / ICON COMMANDS  (call BEFORE CreateWindow)
+--========================================================
+-- Set one window asset by name.
+--   NexoUI:SetAsset("MiniIcon", 11878291121)
+function NexoUI:SetAsset(name, id)
+	ASSETS[name] = _normalizeAssetId(id)
+	return ASSETS[name]
+end
+-- Set many window assets at once.
+--   NexoUI:SetAssets({ GalaxySpiral = 123, Background = 456 })
+function NexoUI:SetAssets(tbl)
+	if type(tbl) == "table" then
+		for k, v in pairs(tbl) do ASSETS[k] = _normalizeAssetId(v) end
+	end
+	return ASSETS
+end
+-- Set one tab icon by name.
+--   NexoUI:SetIcon("Home", 123)
+function NexoUI:SetIcon(name, id)
+	ICONS[name] = _normalizeAssetId(id)
+	return ICONS[name]
+end
+-- Set many tab icons at once.
+--   NexoUI:SetIcons({ Home = 123, Tabs = 456 })
+function NexoUI:SetIcons(tbl)
+	if type(tbl) == "table" then
+		for k, v in pairs(tbl) do ICONS[k] = _normalizeAssetId(v) end
+	end
+	return ICONS
+end
+-- Read the current tables (handy for passing icons to CreateTab).
+function NexoUI:GetAssets() return ASSETS end
+function NexoUI:GetIcons() return ICONS end
 
 local function getScreenGui()
 	-- reuse one ScreenGui for this run (the key system + window share it)
