@@ -1,0 +1,795 @@
+--[[
+    NEXO • HUB — Smooth UI (Black & White)
+      • Bring NPC          : PL7 logic — claims SimulationRadius (real network
+                             ownership) and pulls Enemies to you. Bring Range +
+                             Stand Dist sliders.
+      • Fruit Fast Attack  : PL7 logic — RegisterAttack/RegisterHit + LeftClickRemote M1.
+    (Blox Fruits) Paste-and-run. Settings saved across rejoins.
+]]
+
+--// Services
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local HttpService      = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local playerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+--// Anti-duplicate
+if playerGui:FindFirstChild("NEXO_Hub") then
+    playerGui.NEXO_Hub:Destroy()
+end
+
+--// ===== Config =====
+local SAVE_FILE  = "NEXO_Hub.json"
+local UI_DELAY   = 0
+local STAR_COUNT = 16
+
+local RANGE_MIN, RANGE_MAX = 100, 1000   -- Bring Range (PL7 BringDistance)
+local STAND_MIN, STAND_MAX = 1, 50       -- Stand Dist (stack offset in front)
+local ATTACK_DISTANCE      = 120         -- PL7 getClosestEnemy distance
+local ATTACK_DELAY         = 0           -- PL7 GlobalDelay (0 = full speed)
+
+--// ===== Saved settings =====
+local settings = { bring = false, range = 500, front = 2, fruit = false }
+
+local function canFiles()
+    return (typeof(writefile) == "function")
+        and (typeof(readfile) == "function")
+        and (typeof(isfile) == "function")
+end
+
+local function loadSettings()
+    if not canFiles() then return end
+    pcall(function()
+        if isfile(SAVE_FILE) then
+            local data = HttpService:JSONDecode(readfile(SAVE_FILE))
+            if type(data) == "table" then
+                if type(data.bring) == "boolean" then settings.bring = data.bring end
+                if type(data.fruit) == "boolean" then settings.fruit = data.fruit end
+                if type(data.range) == "number" then
+                    settings.range = math.clamp(math.floor(data.range), RANGE_MIN, RANGE_MAX)
+                end
+                if type(data.front) == "number" then
+                    settings.front = math.clamp(math.floor(data.front), STAND_MIN, STAND_MAX)
+                end
+            end
+        end
+    end)
+end
+
+local function saveSettings()
+    if not canFiles() then return end
+    pcall(function()
+        writefile(SAVE_FILE, HttpService:JSONEncode(settings))
+    end)
+end
+
+loadSettings()
+
+--// ===== Character refs (PL7 style) =====
+local Character, Humanoid, HumanoidRootPart
+local function SetupCharacter(char)
+    Character = char
+    Humanoid = char:WaitForChild("Humanoid")
+    HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
+end
+if LocalPlayer.Character then SetupCharacter(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(SetupCharacter)
+
+--// ===== Blox Fruits dependencies (PL7) =====
+local Remotes, Enemies, Net, RegisterAttack, RegisterHit
+pcall(function()
+    Remotes = ReplicatedStorage:WaitForChild("Remotes")
+    Enemies = Workspace:WaitForChild("Enemies")
+    local Modules = ReplicatedStorage:WaitForChild("Modules")
+    Net = require(Modules:WaitForChild("Net"))
+    RegisterAttack = Net:RemoteEvent("RegisterAttack", true)
+    RegisterHit    = Net:RemoteEvent("RegisterHit", true)
+end)
+
+--// ===== UI =====
+local WHITE = Color3.fromRGB(255, 255, 255)
+local BLACK = Color3.fromRGB(0, 0, 0)
+local DIM   = Color3.fromRGB(40, 40, 40)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "NEXO_Hub"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 9999
+gui.Parent = playerGui
+
+local connections = {}
+local function track(conn) table.insert(connections, conn); return conn end
+
+local function addLaserStroke(stroke, speed)
+    local grad = Instance.new("UIGradient")
+    grad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(35, 35, 35)),
+        ColorSequenceKeypoint.new(0.40, Color3.fromRGB(120, 120, 120)),
+        ColorSequenceKeypoint.new(0.50, WHITE),
+        ColorSequenceKeypoint.new(0.60, Color3.fromRGB(120, 120, 120)),
+        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(35, 35, 35)),
+    })
+    grad.Rotation = 0
+    grad.Parent = stroke
+    TweenService:Create(
+        grad,
+        TweenInfo.new(speed or 2.2, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
+        { Rotation = 360 }
+    ):Play()
+    return grad
+end
+
+local function makeGalaxy(parent, corner, starCount)
+    local gx = Instance.new("Frame")
+    gx.Name = "Galaxy"
+    gx.Size = UDim2.new(1, 0, 1, 0)
+    gx.BackgroundColor3 = Color3.fromRGB(6, 4, 18)
+    gx.BorderSizePixel = 0
+    gx.ClipsDescendants = true
+    gx.ZIndex = 0
+    gx.Parent = parent
+
+    local gxCorner = Instance.new("UICorner")
+    gxCorner.CornerRadius = corner or UDim.new(0, 12)
+    gxCorner.Parent = gx
+
+    local neb = Instance.new("UIGradient")
+    neb.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(8, 6, 26)),
+        ColorSequenceKeypoint.new(0.30, Color3.fromRGB(42, 18, 74)),
+        ColorSequenceKeypoint.new(0.55, Color3.fromRGB(18, 24, 86)),
+        ColorSequenceKeypoint.new(0.80, Color3.fromRGB(74, 22, 92)),
+        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(6, 4, 18)),
+    })
+    neb.Rotation = 0
+    neb.Parent = gx
+    TweenService:Create(neb, TweenInfo.new(9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Rotation = 40 }):Play()
+
+    local clouds = {
+        { c = Color3.fromRGB(150, 70, 255), p = UDim2.new(0.24, 0, 0.30, 0) },
+        { c = Color3.fromRGB(60, 110, 255), p = UDim2.new(0.72, 0, 0.66, 0) },
+    }
+    for _, def in ipairs(clouds) do
+        local cloud = Instance.new("ImageLabel")
+        cloud.Name = "Nebula"
+        cloud.BackgroundTransparency = 1
+        cloud.Image = "rbxassetid://5028857084"
+        cloud.ImageColor3 = def.c
+        cloud.ImageTransparency = 0.6
+        cloud.ScaleType = Enum.ScaleType.Slice
+        cloud.SliceCenter = Rect.new(24, 24, 276, 276)
+        cloud.AnchorPoint = Vector2.new(0.5, 0.5)
+        cloud.Size = UDim2.new(0, 130, 0, 130)
+        cloud.Position = def.p
+        cloud.ZIndex = 0
+        cloud.Parent = gx
+    end
+
+    local stars = {}
+    for _ = 1, (starCount or STAR_COUNT) do
+        local s = Instance.new("Frame")
+        s.Name = "Star"
+        local sz = math.random(10, 22) / 10
+        s.Size = UDim2.new(0, sz, 0, sz)
+        s.Position = UDim2.new(math.random(), 0, math.random(), 0)
+        s.BackgroundColor3 = WHITE
+        s.BorderSizePixel = 0
+        s.BackgroundTransparency = math.random(20, 70) / 100
+        s.ZIndex = 1
+        local sc = Instance.new("UICorner"); sc.CornerRadius = UDim.new(1, 0); sc.Parent = s
+        s.Parent = gx
+        stars[#stars + 1] = {
+            f = s, drift = math.random(6, 16) / 100,
+            phase = math.random() * 6.2831853, tw = math.random(8, 22) / 10,
+        }
+    end
+
+    local acc = 0
+    track(RunService.Heartbeat:Connect(function(dt)
+        if not gx.Parent then return end
+        acc = acc + dt
+        if acc < 1 / 30 then return end
+        local step = acc
+        acc = 0
+        local t = os.clock()
+        for _, st in ipairs(stars) do
+            local f = st.f
+            local px = f.Position.X.Scale - st.drift * step
+            if px < -0.05 then px = 1.05 end
+            f.Position = UDim2.new(px, 0, f.Position.Y.Scale, 0)
+            f.BackgroundTransparency = 0.45 + 0.32 * math.sin(t / st.tw + st.phase)
+        end
+    end))
+
+    return gx
+end
+
+--// Main panel
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 240, 0, 230)
+main.Position = UDim2.new(0.5, -120, 0, 50)
+main.BackgroundColor3 = BLACK
+main.BorderSizePixel = 0
+main.Active = true
+main.Visible = false
+main.Parent = gui
+
+local uiScale = Instance.new("UIScale")
+uiScale.Scale = 0.6
+uiScale.Parent = main
+
+local glow = Instance.new("ImageLabel")
+glow.Name = "Glow"
+glow.BackgroundTransparency = 1
+glow.Image = "rbxassetid://5028857084"
+glow.ImageColor3 = WHITE
+glow.ImageTransparency = 0.82
+glow.ScaleType = Enum.ScaleType.Slice
+glow.SliceCenter = Rect.new(24, 24, 276, 276)
+glow.Size = UDim2.new(1, 40, 1, 40)
+glow.Position = UDim2.new(0, -20, 0, -20)
+glow.ZIndex = 0
+glow.Parent = main
+
+local sheen = Instance.new("UIGradient")
+sheen.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 20, 20)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 0, 0)),
+})
+sheen.Rotation = 90
+sheen.Parent = main
+
+local mc = Instance.new("UICorner")
+mc.CornerRadius = UDim.new(0, 12)
+mc.Parent = main
+
+local ms = Instance.new("UIStroke")
+ms.Color = WHITE
+ms.Thickness = 1.5
+ms.Transparency = 0.15
+ms.Parent = main
+addLaserStroke(ms, 2.4)
+
+makeGalaxy(main, UDim.new(0, 12), STAR_COUNT)
+
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.Size = UDim2.new(1, 0, 1, 0)
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.Parent = main
+
+local pad = Instance.new("UIPadding")
+pad.PaddingTop = UDim.new(0, 12)
+pad.PaddingBottom = UDim.new(0, 12)
+pad.PaddingLeft = UDim.new(0, 14)
+pad.PaddingRight = UDim.new(0, 14)
+pad.Parent = content
+
+local layout = Instance.new("UIListLayout")
+layout.FillDirection = Enum.FillDirection.Vertical
+layout.Padding = UDim.new(0, 8)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = content
+
+local titleLbl = Instance.new("TextLabel")
+titleLbl.LayoutOrder = 1
+titleLbl.BackgroundTransparency = 1
+titleLbl.Size = UDim2.new(1, 0, 0, 22)
+titleLbl.Font = Enum.Font.Michroma
+titleLbl.Text = "NEXO • HUB"
+titleLbl.TextSize = 16
+titleLbl.TextColor3 = WHITE
+titleLbl.Parent = content
+
+local divider = Instance.new("Frame")
+divider.LayoutOrder = 2
+divider.Size = UDim2.new(1, 0, 0, 1)
+divider.BackgroundColor3 = WHITE
+divider.BackgroundTransparency = 0.6
+divider.BorderSizePixel = 0
+divider.Parent = content
+
+--// ===== Reusable toggle component =====
+local function createToggle(order, labelText, getState, onClick)
+    local row = Instance.new("Frame")
+    row.LayoutOrder = order
+    row.Size = UDim2.new(1, 0, 0, 26)
+    row.BackgroundTransparency = 1
+    row.Parent = content
+
+    local lbl = Instance.new("TextLabel")
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, -56, 1, 0)
+    lbl.Font = Enum.Font.Michroma
+    lbl.Text = labelText
+    lbl.TextSize = 13
+    lbl.TextColor3 = WHITE
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local tbtn = Instance.new("TextButton")
+    tbtn.Size = UDim2.new(0, 46, 0, 24)
+    tbtn.Position = UDim2.new(1, -46, 0.5, -12)
+    tbtn.AutoButtonColor = false
+    tbtn.Text = ""
+    tbtn.BackgroundColor3 = DIM
+    tbtn.BorderSizePixel = 0
+    tbtn.Parent = row
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = tbtn
+    local st = Instance.new("UIStroke"); st.Color = WHITE; st.Transparency = 0.4; st.Parent = tbtn
+
+    local kn = Instance.new("Frame")
+    kn.Size = UDim2.new(0, 18, 0, 18)
+    kn.Position = UDim2.new(0, 3, 0.5, -9)
+    kn.BackgroundColor3 = WHITE
+    kn.BorderSizePixel = 0
+    kn.Parent = tbtn
+    local knc = Instance.new("UICorner"); knc.CornerRadius = UDim.new(1, 0); knc.Parent = kn
+
+    local function refresh()
+        if getState() then
+            TweenService:Create(tbtn, TweenInfo.new(0.15), { BackgroundColor3 = WHITE }):Play()
+            TweenService:Create(kn, TweenInfo.new(0.15), { Position = UDim2.new(1, -21, 0.5, -9), BackgroundColor3 = BLACK }):Play()
+        else
+            TweenService:Create(tbtn, TweenInfo.new(0.15), { BackgroundColor3 = DIM }):Play()
+            TweenService:Create(kn, TweenInfo.new(0.15), { Position = UDim2.new(0, 3, 0.5, -9), BackgroundColor3 = WHITE }):Play()
+        end
+    end
+
+    tbtn.MouseEnter:Connect(function()
+        TweenService:Create(st, TweenInfo.new(0.15), { Transparency = 0 }):Play()
+    end)
+    tbtn.MouseLeave:Connect(function()
+        TweenService:Create(st, TweenInfo.new(0.15), { Transparency = 0.4 }):Play()
+    end)
+    tbtn.MouseButton1Click:Connect(function()
+        onClick()
+        refresh()
+    end)
+
+    refresh()
+    return { refresh = refresh }
+end
+
+--// ===== Reusable slider component =====
+local function createSlider(orderLabel, orderBar, labelText, minV, maxV, initial, onChange)
+    local lbl = Instance.new("TextLabel")
+    lbl.LayoutOrder = orderLabel
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, 0, 0, 18)
+    lbl.Font = Enum.Font.Michroma
+    lbl.TextSize = 12
+    lbl.TextColor3 = WHITE
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = content
+
+    local bar = Instance.new("TextButton")
+    bar.LayoutOrder = orderBar
+    bar.AutoButtonColor = false
+    bar.Text = ""
+    bar.Size = UDim2.new(1, 0, 0, 12)
+    bar.BackgroundColor3 = DIM
+    bar.BorderSizePixel = 0
+    bar.Parent = content
+    local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(1, 0); bc.Parent = bar
+    local bs = Instance.new("UIStroke"); bs.Color = WHITE; bs.Transparency = 0.5; bs.Parent = bar
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0.1, 0, 1, 0)
+    fill.BackgroundColor3 = WHITE
+    fill.BorderSizePixel = 0
+    fill.Parent = bar
+    local fcn = Instance.new("UICorner"); fcn.CornerRadius = UDim.new(1, 0); fcn.Parent = fill
+
+    local sk = Instance.new("Frame")
+    sk.Size = UDim2.new(0, 14, 0, 14)
+    sk.AnchorPoint = Vector2.new(0.5, 0.5)
+    sk.Position = UDim2.new(0.1, 0, 0.5, 0)
+    sk.BackgroundColor3 = WHITE
+    sk.BorderSizePixel = 0
+    sk.ZIndex = 2
+    sk.Parent = bar
+    local skc = Instance.new("UICorner"); skc.CornerRadius = UDim.new(1, 0); skc.Parent = sk
+    local sks = Instance.new("UIStroke"); sks.Color = BLACK; sks.Transparency = 0.3; sks.Parent = sk
+
+    local value = math.clamp(initial, minV, maxV)
+    local function refresh()
+        local rel = math.clamp((value - minV) / (maxV - minV), 0, 1)
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        sk.Position = UDim2.new(rel, 0, 0.5, 0)
+        lbl.Text = labelText .. " : " .. value
+    end
+
+    local sliding = false
+    local function setFromX(absX)
+        local barPos  = bar.AbsolutePosition.X
+        local barSize = bar.AbsoluteSize.X
+        if barSize <= 0 then return end
+        local rel = math.clamp((absX - barPos) / barSize, 0, 1)
+        value = math.floor(minV + rel * (maxV - minV) + 0.5)
+        refresh()
+        if onChange then onChange(value, false) end
+    end
+
+    bar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            sliding = true
+            setFromX(input.Position.X)
+        end
+    end)
+    track(UserInputService.InputChanged:Connect(function(input)
+        if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            setFromX(input.Position.X)
+        end
+    end))
+    track(UserInputService.InputEnded:Connect(function(input)
+        if sliding and (input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            sliding = false
+            if onChange then onChange(value, true) end
+        end
+    end))
+
+    refresh()
+    return { get = function() return value end, set = function(v) value = math.clamp(v, minV, maxV); refresh() end }
+end
+
+--// Breathing border
+task.spawn(function()
+    while gui.Parent do
+        TweenService:Create(ms, TweenInfo.new(1.1, Enum.EasingStyle.Sine), { Thickness = 2.4 }):Play()
+        task.wait(1.1)
+        TweenService:Create(ms, TweenInfo.new(1.1, Enum.EasingStyle.Sine), { Thickness = 1.4 }):Play()
+        task.wait(1.1)
+    end
+end)
+
+--// Draggable panel
+local function makeDraggable(frame, handle)
+    handle = handle or frame
+    local dragging, dragStart, startPos
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    track(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end))
+end
+makeDraggable(main)
+
+--// Mini logo button
+local mini = Instance.new("TextButton")
+mini.Name = "Mini"
+mini.Size = UDim2.new(0, 48, 0, 48)
+mini.Position = UDim2.new(0, 18, 0, 64)
+mini.BackgroundColor3 = BLACK
+mini.AutoButtonColor = false
+mini.Text = "N"
+mini.Font = Enum.Font.Michroma
+mini.TextSize = 22
+mini.TextColor3 = WHITE
+mini.Active = true
+mini.Visible = false
+mini.Parent = gui
+
+local mnc = Instance.new("UICorner"); mnc.CornerRadius = UDim.new(1, 0); mnc.Parent = mini
+local miniGrad = Instance.new("UIGradient")
+miniGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 22, 22)),
+    ColorSequenceKeypoint.new(1, BLACK),
+})
+miniGrad.Rotation = 90
+miniGrad.Parent = mini
+local miniStroke = Instance.new("UIStroke"); miniStroke.Color = WHITE; miniStroke.Thickness = 1.6; miniStroke.Transparency = 0.1; miniStroke.Parent = mini
+addLaserStroke(miniStroke, 1.6)
+
+local miniScale = Instance.new("UIScale"); miniScale.Scale = 1; miniScale.Parent = mini
+
+task.spawn(function()
+    while gui.Parent do
+        TweenService:Create(miniScale, TweenInfo.new(0.9, Enum.EasingStyle.Sine), { Scale = 1.08 }):Play()
+        TweenService:Create(miniStroke, TweenInfo.new(0.9, Enum.EasingStyle.Sine), { Transparency = 0.45 }):Play()
+        task.wait(0.9)
+        TweenService:Create(miniScale, TweenInfo.new(0.9, Enum.EasingStyle.Sine), { Scale = 1.0 }):Play()
+        TweenService:Create(miniStroke, TweenInfo.new(0.9, Enum.EasingStyle.Sine), { Transparency = 0.1 }):Play()
+        task.wait(0.9)
+    end
+end)
+
+mini.MouseEnter:Connect(function()
+    TweenService:Create(miniScale, TweenInfo.new(0.15), { Scale = 1.18 }):Play()
+end)
+mini.MouseLeave:Connect(function()
+    TweenService:Create(miniScale, TweenInfo.new(0.15), { Scale = 1.0 }):Play()
+end)
+
+local uiVisible = true
+local function showHub()
+    uiVisible = true
+    main.Visible = true
+    uiScale.Scale = 0.6
+    main.BackgroundTransparency = 1
+    TweenService:Create(uiScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+    TweenService:Create(main, TweenInfo.new(0.3), { BackgroundTransparency = 0 }):Play()
+    TweenService:Create(mini, TweenInfo.new(0.35, Enum.EasingStyle.Back), { Rotation = 0 }):Play()
+end
+local function hideHub()
+    uiVisible = false
+    local t = TweenService:Create(uiScale, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.6 })
+    TweenService:Create(main, TweenInfo.new(0.25), { BackgroundTransparency = 1 }):Play()
+    t:Play()
+    t.Completed:Once(function()
+        if not uiVisible then main.Visible = false end
+    end)
+    TweenService:Create(mini, TweenInfo.new(0.35, Enum.EasingStyle.Back), { Rotation = 180 }):Play()
+end
+local function toggleHub()
+    if uiVisible then hideHub() else showHub() end
+end
+
+do
+    local dragging, moved, dragStart, startPos
+    mini.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; moved = false
+            dragStart = input.Position; startPos = mini.Position
+        end
+    end)
+    track(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 6 then moved = true end
+            mini.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end))
+    mini.InputEnded:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            dragging = false
+            if not moved then toggleHub() end
+        end
+    end)
+end
+
+main.BackgroundTransparency = 1
+uiScale.Scale = 0.6
+task.spawn(function()
+    task.wait(UI_DELAY)
+    main.Visible = true
+    mini.Visible = true
+    TweenService:Create(uiScale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+    TweenService:Create(main, TweenInfo.new(0.35), { BackgroundTransparency = 0 }):Play()
+end)
+
+--// ============================================================
+--// ===== Bring NPC  (PL7 logic — real, via SimulationRadius) =====
+--// ============================================================
+
+-- Always claim simulation radius so moved enemies REALLY replicate (PL7 trick)
+track(RunService.RenderStepped:Connect(function()
+    pcall(function()
+        if setscriptable then
+            setscriptable(LocalPlayer, "SimulationRadius", true)
+        end
+        if sethiddenproperty then
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        end
+    end)
+end))
+
+local function doBring()
+    if not (Enemies and HumanoidRootPart) then return end
+    local stackPos = HumanoidRootPart.CFrame * CFrame.new(0, 0, -settings.front)
+    for _, v in pairs(Enemies:GetChildren()) do
+        pcall(function()
+            local hrp = v:FindFirstChild("HumanoidRootPart")
+            local hum = v:FindFirstChild("Humanoid")
+            if hrp and hum and hum.Health > 0
+               and (hrp.Position - HumanoidRootPart.Position).Magnitude <= settings.range then
+                if v.PrimaryPart then v.PrimaryPart.CFrame = stackPos end
+                hrp.CFrame = stackPos
+                hum.JumpPower = 0
+                hum.WalkSpeed = 0
+                hrp.Size = Vector3.new(1, 1, 1)
+                hrp.Transparency = 1
+                hrp.CanCollide = false
+                if v:FindFirstChild("Head") then v.Head.CanCollide = false end
+                if v.PrimaryPart then v.PrimaryPart.CanCollide = false end
+                if hum:FindFirstChild("Animator") then hum.Animator:Destroy() end
+                hum:ChangeState(11)
+                hum:ChangeState(14)
+            end
+        end)
+    end
+end
+
+local bringConn = nil
+local function startBring()
+    if bringConn then return end
+    bringConn = RunService.RenderStepped:Connect(function()
+        if settings.bring and gui.Parent then
+            pcall(doBring)
+        end
+    end)
+    track(bringConn)
+end
+local function stopBring()
+    if bringConn then bringConn:Disconnect() bringConn = nil end
+end
+
+--// ============================================================
+--// ===== Fruit Fast Attack  (PL7 logic) =====
+--// ============================================================
+local function getClosestEnemy(distance)
+    local target, others = nil, {}
+    if Enemies then
+        for _, enemy in pairs(Enemies:GetChildren()) do
+            local hrp = enemy:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local dist = LocalPlayer:DistanceFromCharacter(hrp.Position)
+                if dist < distance then
+                    if not target then target = hrp else table.insert(others, { enemy, hrp }) end
+                end
+            end
+        end
+    end
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local dist = LocalPlayer:DistanceFromCharacter(hrp.Position)
+                if dist < distance then
+                    if not target then target = hrp else table.insert(others, { plr, hrp }) end
+                end
+            end
+        end
+    end
+    return target, others
+end
+
+local function AttackEnemy(target, tbl)
+    if target and RegisterAttack and RegisterHit then
+        pcall(function()
+            RegisterAttack:FireServer(0)
+            RegisterHit:FireServer(target, tbl)
+        end)
+    end
+end
+
+local function AttackNearest()
+    pcall(function()
+        local target, others = getClosestEnemy(ATTACK_DISTANCE)
+        AttackEnemy(target, others)
+    end)
+end
+
+local function Actived()
+    pcall(function()
+        local tool = Character and Character:FindFirstChildOfClass("Tool")
+        if tool and getconnections and getupvalues then
+            for _, v in next, getconnections(tool.Activated) do
+                if typeof(v.Function) == "function" then getupvalues(v.Function) end
+            end
+        end
+    end)
+end
+
+local function AttackM1()
+    pcall(function()
+        local tool = Character and Character:FindFirstChildOfClass("Tool")
+        if not tool then return end
+        local LeftClickRemote = tool:FindFirstChild("LeftClickRemote")
+        if tool.ToolTip == "Blox Fruit" and LeftClickRemote then
+            Actived()
+            LeftClickRemote:FireServer(Vector3.new(0.01, -500, 0.01), 1, true)
+            LeftClickRemote:FireServer(false)
+        end
+    end)
+end
+
+local function BladeHits()
+    AttackNearest()
+    AttackM1()
+end
+
+local spamEnabled = false
+local spamThread = nil
+local function startSpam()
+    if spamThread then return end
+    spamThread = task.spawn(function()
+        while spamEnabled do
+            pcall(BladeHits)
+            if ATTACK_DELAY > 0 then task.wait(ATTACK_DELAY) else task.wait() end
+        end
+        spamThread = nil
+    end)
+end
+
+--// ===== Build controls (SAME UI) =====
+local bringToggle = createToggle(3, "Bring NPC",
+    function() return settings.bring end,
+    function()
+        settings.bring = not settings.bring
+        saveSettings()
+        if settings.bring then startBring() else stopBring() end
+    end)
+
+createSlider(4, 5, "Bring Range", RANGE_MIN, RANGE_MAX, settings.range, function(v, final)
+    settings.range = v
+    if final then saveSettings() end
+end)
+createSlider(6, 7, "Stand Dist", STAND_MIN, STAND_MAX, settings.front, function(v, final)
+    settings.front = v
+    if final then saveSettings() end
+end)
+
+local divider2 = Instance.new("Frame")
+divider2.LayoutOrder = 8
+divider2.Size = UDim2.new(1, 0, 0, 1)
+divider2.BackgroundColor3 = WHITE
+divider2.BackgroundTransparency = 0.6
+divider2.BorderSizePixel = 0
+divider2.Parent = content
+
+local fruitToggle = createToggle(9, "Fruit Fast Attack",
+    function() return spamEnabled end,
+    function()
+        spamEnabled = not spamEnabled
+        settings.fruit = spamEnabled
+        saveSettings()
+        if spamEnabled then startSpam() end
+    end)
+
+--// Cleanup on close
+gui.AncestryChanged:Connect(function(_, parent)
+    if not parent then
+        stopBring()
+        spamEnabled = false
+        for _, c in ipairs(connections) do
+            pcall(function() c:Disconnect() end)
+        end
+        table.clear(connections)
+    end
+end)
+
+--// Apply saved state
+if settings.bring then startBring() end
+bringToggle.refresh()
+
+if settings.fruit then
+    spamEnabled = true
+    startSpam()
+end
+fruitToggle.refresh()
