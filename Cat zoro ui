@@ -1,0 +1,1128 @@
+--[[
+    NEXO • HUB V2 — UI ONLY (Hacker Green / Matrix theme)
+    Pure visual interface. NO features, NO remotes, NO auto-ken, NO logic.
+    Kept (purely cosmetic / UI behaviour):
+      • Smooth pop-in / hover animations
+      • Animated "laser" gradient around the border stroke
+      • Galaxy / nebula background with drifting stars
+      • Draggable main panel
+      • Mini animated logo button (draggable) to HIDE / SHOW the hub
+      • Toggle switch that flips visually (does nothing else)
+    Paste-and-run (anti-duplicate).
+]]
+
+--// Services (UI only)
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local playerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+--// Anti-duplicate
+if playerGui:FindFirstChild("NEXO_Hub") then
+    playerGui.NEXO_Hub:Destroy()
+end
+
+--// Config (UI only)
+local UI_DELAY = 0   -- seconds before the hub UI appears (set to 5 to delay)
+
+--// ===== UI =====
+-- Hacker green theme palette
+local WHITE = Color3.fromRGB(0, 255, 90)   -- bright hacker green (primary accent / text)
+local BLACK = Color3.fromRGB(0, 8, 2)      -- near-black with a faint green tint (backgrounds)
+local DIM   = Color3.fromRGB(0, 46, 18)    -- dark green (inactive tracks / tabs)
+local ACCENT = Color3.fromRGB(0, 225, 255)  -- (legacy accent, no longer the main driver)
+
+-- ===== Red / Green live-theme state =====
+local GREEN = Color3.fromRGB(0, 255, 90)
+local RED   = Color3.fromRGB(255, 45, 60)
+local currentAccent = GREEN
+local currentDim    = Color3.new(GREEN.R * 0.18, GREEN.G * 0.18, GREEN.B * 0.18)
+local switchRefreshers = {}
+local matrixFling = false  -- when true, the code-rain columns fling out of the UI
+local themeTweenTime = 0.15  -- how long tab/switch colour changes take (raised during theme flips)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "NEXO_Hub"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 9999
+gui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets  -- keep clear of notches / rounded corners on phones
+gui.Parent = playerGui
+
+--// ===== Responsive scaling (PC, laptop, Mac, phone, iPhone, tablet, console) =====
+local camera = workspace.CurrentCamera
+local responsiveScale = 1
+local function computeScale()
+    local vp = (camera and camera.ViewportSize) or Vector2.new(1366, 768)
+    if vp.X < 1 or vp.Y < 1 then vp = Vector2.new(1366, 768) end
+    -- scale against a 1366x768 laptop reference screen
+    local s = math.min(vp.X / 1366, vp.Y / 768)
+    -- touch-only devices (phones / tablets) get a slightly larger UI so controls stay tappable
+    if UserInputService.TouchEnabled and not UserInputService.MouseEnabled then
+        s = s * 1.15
+    end
+    return math.clamp(s, 0.8, 1.7)
+end
+responsiveScale = computeScale()
+
+-- Animated "laser" highlight that travels around any UIStroke.
+local function addLaserStroke(stroke, speed)
+    local grad = Instance.new("UIGradient")
+    -- greyscale travelling highlight; the UIStroke.Color (theme colour) tints it
+    grad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(25, 25, 25)),
+        ColorSequenceKeypoint.new(0.40, Color3.fromRGB(120, 120, 120)),
+        ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
+        ColorSequenceKeypoint.new(0.60, Color3.fromRGB(120, 120, 120)),
+        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(25, 25, 25)),
+    })
+    grad.Rotation = 0
+    grad.Parent = stroke
+    TweenService:Create(
+        grad,
+        TweenInfo.new(speed or 2.2, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
+        { Rotation = 360 }
+    ):Play()
+    return grad
+end
+
+-- Animated galaxy / nebula background that fills a parent (clipped to its corners).
+local function makeGalaxy(parent, corner, starCount)
+    local gx = Instance.new("Frame")
+    gx.Name = "Galaxy"
+    gx.Size = UDim2.new(1, 0, 1, 0)
+    gx.BackgroundColor3 = Color3.fromRGB(6, 4, 18)
+    gx.BorderSizePixel = 0
+    gx.ClipsDescendants = true
+    gx.ZIndex = 0
+    gx.Parent = parent
+
+    local gxCorner = Instance.new("UICorner")
+    gxCorner.CornerRadius = corner or UDim.new(0, 12)
+    gxCorner.Parent = gx
+
+    -- swirling deep-space colour wash
+    local neb = Instance.new("UIGradient")
+    neb.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(8, 6, 26)),
+        ColorSequenceKeypoint.new(0.30, Color3.fromRGB(42, 18, 74)),
+        ColorSequenceKeypoint.new(0.55, Color3.fromRGB(18, 24, 86)),
+        ColorSequenceKeypoint.new(0.80, Color3.fromRGB(74, 22, 92)),
+        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(6, 4, 18)),
+    })
+    neb.Rotation = 0
+    neb.Parent = gx
+    TweenService:Create(neb, TweenInfo.new(9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Rotation = 40 }):Play()
+
+    -- soft nebula clouds
+    local clouds = {
+        { c = Color3.fromRGB(150, 70, 255), p = UDim2.new(0.20, 0, 0.28, 0) },
+        { c = Color3.fromRGB(60, 110, 255), p = UDim2.new(0.74, 0, 0.62, 0) },
+        { c = Color3.fromRGB(200, 60, 170), p = UDim2.new(0.48, 0, 0.85, 0) },
+    }
+    for _, def in ipairs(clouds) do
+        local cloud = Instance.new("ImageLabel")
+        cloud.Name = "Nebula"
+        cloud.BackgroundTransparency = 1
+        cloud.Image = "rbxassetid://5028857084"
+        cloud.ImageColor3 = def.c
+        cloud.ImageTransparency = 0.62
+        cloud.ScaleType = Enum.ScaleType.Slice
+        cloud.SliceCenter = Rect.new(24, 24, 276, 276)
+        cloud.AnchorPoint = Vector2.new(0.5, 0.5)
+        cloud.Size = UDim2.new(0, 130, 0, 130)
+        cloud.Position = def.p
+        cloud.ZIndex = 0
+        cloud.Parent = gx
+        task.spawn(function()
+            while cloud.Parent do
+                local t = math.random(26, 46) / 10
+                TweenService:Create(cloud, TweenInfo.new(t, Enum.EasingStyle.Sine), { ImageTransparency = 0.45 }):Play()
+                task.wait(t)
+                TweenService:Create(cloud, TweenInfo.new(t, Enum.EasingStyle.Sine), { ImageTransparency = 0.72 }):Play()
+                task.wait(t)
+            end
+        end)
+    end
+
+    -- twinkling stars
+    for _ = 1, (starCount or 26) do
+        local s = Instance.new("Frame")
+        s.Name = "Star"
+        local sz = math.random(10, 22) / 10
+        s.Size = UDim2.new(0, sz, 0, sz)
+        s.Position = UDim2.new(math.random(), 0, math.random(), 0)
+        s.BackgroundColor3 = WHITE
+        s.BorderSizePixel = 0
+        s.BackgroundTransparency = math.random(20, 70) / 100
+        s.ZIndex = 1
+        local sc = Instance.new("UICorner"); sc.CornerRadius = UDim.new(1, 0); sc.Parent = s
+        s.Parent = gx
+        -- continuous LEFTWARD drift that loops
+        local driftSpeed = math.random(6, 16) / 100
+        task.spawn(function()
+            while s.Parent do
+                local dt = RunService.Heartbeat:Wait()
+                local x = s.Position.X.Scale - driftSpeed * dt
+                if x < -0.05 then
+                    s.Position = UDim2.new(1.05, 0, math.random(), 0)
+                else
+                    s.Position = UDim2.new(x, 0, s.Position.Y.Scale, 0)
+                end
+            end
+        end)
+        task.spawn(function()
+            while s.Parent do
+                local spd = math.random(8, 22) / 10
+                TweenService:Create(s, TweenInfo.new(spd, Enum.EasingStyle.Sine), { BackgroundTransparency = math.random(0, 25) / 100 }):Play()
+                task.wait(spd)
+                TweenService:Create(s, TweenInfo.new(spd, Enum.EasingStyle.Sine), { BackgroundTransparency = math.random(60, 90) / 100 }):Play()
+                task.wait(spd)
+            end
+        end)
+    end
+
+    return gx
+end
+
+-- Hacker-theme "Matrix rain": green code glyphs continuously falling down the background.
+local function makeMatrix(parent, corner, columnCount)
+    local mx = Instance.new("Frame")
+    mx.Name = "Matrix"
+    mx.Size = UDim2.new(1, 0, 1, 0)
+    mx.BackgroundColor3 = Color3.fromRGB(0, 6, 0)
+    mx.BorderSizePixel = 0
+    mx.ClipsDescendants = true
+    mx.ZIndex = 0
+    mx.Parent = parent
+
+    local mxCorner = Instance.new("UICorner")
+    mxCorner.CornerRadius = corner or UDim.new(0, 12)
+    mxCorner.Parent = mx
+
+    local CHARS = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ<>*/+=:#%@"
+    local function randChar()
+        local i = math.random(1, #CHARS)
+        return CHARS:sub(i, i)
+    end
+    local function buildStream(n)
+        local parts = {}
+        for _ = 1, n do parts[#parts + 1] = randChar() end
+        return table.concat(parts, "\n")
+    end
+
+    local cols = columnCount or 16
+    local colW = 14
+    for i = 1, cols do
+        local col = Instance.new("TextLabel")
+        col.Name = "Stream"
+        col.BackgroundTransparency = 1
+        col.Size = UDim2.new(0, colW, 2, 0)
+        col.Position = UDim2.new(0, (i - 1) * colW, 0, 0)
+        col.Font = Enum.Font.Code
+        col.TextSize = 12
+        col.TextColor3 = currentAccent
+        col.TextXAlignment = Enum.TextXAlignment.Center
+        col.TextYAlignment = Enum.TextYAlignment.Top
+        col.ZIndex = 1
+        col.Parent = mx
+
+        -- fade the trail (transparency only; colour comes from the theme via TextColor3)
+        local g = Instance.new("UIGradient")
+        g.Rotation = 90
+        g.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0.00, 0.7),
+            NumberSequenceKeypoint.new(0.70, 0.15),
+            NumberSequenceKeypoint.new(1.00, 0.0),
+        })
+        g.Parent = col
+
+        task.spawn(function()
+            -- staggered start so the background fills in gradually (not all at once)
+            task.wait(math.random(0, 45) / 10)
+            while col.Parent do
+                if matrixFling then
+                    -- hidden during the fling; individual letters do the flying instead
+                    col.Visible = false
+                    task.wait(0.05)
+                else
+                    col.Visible = true
+                    col.Rotation = 0
+                    col.Text = buildStream(16)
+                    col.Position = UDim2.new(0, (i - 1) * colW, 0, -math.random(120, 260))
+                    local fall = TweenService:Create(
+                        col,
+                        TweenInfo.new(math.random(55, 100) / 10, Enum.EasingStyle.Linear),
+                        { Position = UDim2.new(0, (i - 1) * colW, 1, 30) }
+                    )
+                    fall:Play()
+                    while fall.PlaybackState == Enum.PlaybackState.Playing and not matrixFling do
+                        task.wait(0.1)
+                    end
+                    if matrixFling then fall:Cancel() end
+                    task.wait(math.random(3, 9) / 10)
+                end
+            end
+        end)
+    end
+
+    return mx
+end
+
+--// Main panel
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 230, 0, 262)
+main.Position = UDim2.new(0.5, -115, 0, 50)
+main.BackgroundColor3 = BLACK
+main.BorderSizePixel = 0
+main.Active = true
+main.Visible = false
+main.Parent = gui
+
+local uiScale = Instance.new("UIScale")
+uiScale.Scale = 0.6
+uiScale.Parent = main
+
+-- soft outer glow behind the panel
+local glow = Instance.new("ImageLabel")
+glow.Name = "Glow"
+glow.BackgroundTransparency = 1
+glow.Image = "rbxassetid://5028857084"
+glow.ImageColor3 = WHITE
+glow.ImageTransparency = 0.82
+glow.ScaleType = Enum.ScaleType.Slice
+glow.SliceCenter = Rect.new(24, 24, 276, 276)
+glow.Size = UDim2.new(1, 40, 1, 40)
+glow.Position = UDim2.new(0, -20, 0, -20)
+glow.ZIndex = 0
+glow.Parent = main
+
+-- subtle vertical background sheen
+local sheen = Instance.new("UIGradient")
+sheen.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 24, 8)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 4, 0)),
+})
+sheen.Rotation = 90
+sheen.Parent = main
+
+local mc = Instance.new("UICorner")
+mc.CornerRadius = UDim.new(0, 12)
+mc.Parent = main
+
+local ms = Instance.new("UIStroke")
+ms.Color = WHITE
+ms.Thickness = 1.5
+ms.Transparency = 0.15
+ms.Parent = main
+addLaserStroke(ms, 2.4) -- laser border on the panel
+
+-- hacker-theme Matrix code-rain background (clipped to the panel's rounded corners)
+local matrix = makeMatrix(main, UDim.new(0, 12), 16)
+
+-- inner content holder
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.Size = UDim2.new(1, 0, 1, 0)
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.Parent = main
+
+local pad = Instance.new("UIPadding")
+pad.PaddingTop = UDim.new(0, 12)
+pad.PaddingBottom = UDim.new(0, 12)
+pad.PaddingLeft = UDim.new(0, 14)
+pad.PaddingRight = UDim.new(0, 14)
+pad.Parent = content
+
+local layout = Instance.new("UIListLayout")
+layout.FillDirection = Enum.FillDirection.Vertical
+layout.Padding = UDim.new(0, 8)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = content
+
+--// Title
+local titleLbl = Instance.new("TextLabel")
+titleLbl.LayoutOrder = 1
+titleLbl.BackgroundTransparency = 1
+titleLbl.Size = UDim2.new(1, 0, 0, 22)
+titleLbl.Font = Enum.Font.Michroma
+titleLbl.Text = "NEXO • HUB"
+titleLbl.TextSize = 16
+titleLbl.TextColor3 = currentAccent
+titleLbl.Parent = content
+
+--// Divider
+local divider = Instance.new("Frame")
+divider.LayoutOrder = 2
+divider.Size = UDim2.new(1, 0, 0, 1)
+divider.BackgroundColor3 = currentAccent
+divider.BackgroundTransparency = 0.6
+divider.BorderSizePixel = 0
+divider.Parent = content
+
+--// ===== Tab system (3 tabs) — purely visual =====
+local tabBar = Instance.new("Frame")
+tabBar.Name = "TabBar"
+tabBar.LayoutOrder = 3
+tabBar.Size = UDim2.new(1, 0, 0, 26)
+tabBar.BackgroundTransparency = 1
+tabBar.Parent = content
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 6)
+tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabLayout.Parent = tabBar
+
+local TAB_NAMES = { "Main", "Combat", "Misc" }
+
+-- 5 differently-named switches per tab (purely visual)
+local TAB_SWITCHES = {
+    Main   = { "Auto Ken", "Auto Farm", "Auto Click", "Infinite Stamina", "Walk Speed", "Auto Sell" },
+    Combat = { "Auto Attack", "Auto Block", "Auto Dodge", "Hitbox Expander", "Kill Aura", "Auto Parry" },
+    Misc   = { "Fly", "Noclip", "ESP Players", "Anti AFK", "Fullbright", "Speed Hack" },
+}
+
+local tabButtons = {}
+local activeTab = 1
+
+local function makeTab(name, index)
+    local btn = Instance.new("TextButton")
+    btn.Name = "Tab_" .. name
+    btn.LayoutOrder = index
+    btn.AutoButtonColor = false
+    btn.Size = UDim2.new(0, 60, 1, 0)
+    btn.BackgroundColor3 = DIM
+    btn.BackgroundTransparency = 0.2
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.Michroma
+    btn.Text = name
+    btn.TextSize = 11
+    btn.TextColor3 = WHITE
+    btn.Parent = tabBar
+
+    local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 8); bc.Parent = btn
+    tabButtons[index] = { button = btn }
+    return btn
+end
+
+for i, n in ipairs(TAB_NAMES) do
+    makeTab(n, i)
+end
+
+--// ===== Switch list (rebuilt per active tab) =====
+local switchHolder = Instance.new("ScrollingFrame")
+switchHolder.Name = "SwitchHolder"
+switchHolder.LayoutOrder = 4
+switchHolder.Size = UDim2.new(1, 0, 0, 164)
+switchHolder.BackgroundTransparency = 1
+switchHolder.BorderSizePixel = 0
+switchHolder.ScrollBarThickness = 4
+switchHolder.ScrollBarImageColor3 = currentAccent
+switchHolder.ScrollBarImageTransparency = 0.25
+switchHolder.CanvasSize = UDim2.new(0, 0, 0, 0)
+switchHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
+switchHolder.ScrollingDirection = Enum.ScrollingDirection.Y
+switchHolder.ClipsDescendants = true  -- keep switches / slider INSIDE the box (no spill-out of the UI)
+switchHolder.Parent = content
+
+local switchPad = Instance.new("UIPadding")
+switchPad.PaddingLeft = UDim.new(0, 2)
+switchPad.PaddingRight = UDim.new(0, 10)  -- leave room for the scroll bar so toggles aren't covered / cut
+switchPad.PaddingTop = UDim.new(0, 2)
+switchPad.PaddingBottom = UDim.new(0, 2)
+switchPad.Parent = switchHolder
+
+local switchLayout = Instance.new("UIListLayout")
+switchLayout.FillDirection = Enum.FillDirection.Vertical
+switchLayout.Padding = UDim.new(0, 6)
+switchLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+switchLayout.SortOrder = Enum.SortOrder.LayoutOrder
+switchLayout.Parent = switchHolder
+
+-- one visual switch row (toggle just flips, no logic)
+local function makeSwitch(name, order)
+    local row = Instance.new("Frame")
+    row.Name = "Switch_" .. name
+    row.LayoutOrder = order
+    row.Size = UDim2.new(1, 0, 0, 28)
+    row.BackgroundTransparency = 1
+    row.Parent = switchHolder
+
+    local rowLabel = Instance.new("TextLabel")
+    rowLabel.BackgroundTransparency = 1
+    rowLabel.Size = UDim2.new(1, -56, 1, 0)
+    rowLabel.Font = Enum.Font.Michroma
+    rowLabel.Text = name
+    rowLabel.TextSize = 12
+    rowLabel.TextColor3 = WHITE
+    rowLabel.TextXAlignment = Enum.TextXAlignment.Left
+    rowLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    rowLabel.Parent = row
+
+    local track = Instance.new("TextButton")
+    track.Size = UDim2.new(0, 46, 0, 24)
+    track.Position = UDim2.new(1, -46, 0.5, -12)
+    track.AutoButtonColor = false
+    track.Text = ""
+    track.BackgroundColor3 = DIM
+    track.BorderSizePixel = 0
+    track.Parent = row
+    local tc = Instance.new("UICorner"); tc.CornerRadius = UDim.new(1, 0); tc.Parent = track
+    local tstroke = Instance.new("UIStroke"); tstroke.Color = WHITE; tstroke.Transparency = 0.4; tstroke.Parent = track
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 18, 0, 18)
+    knob.Position = UDim2.new(0, 3, 0.5, -9)
+    knob.BackgroundColor3 = WHITE
+    knob.BorderSizePixel = 0
+    knob.Parent = track
+    local kc = Instance.new("UICorner"); kc.CornerRadius = UDim.new(1, 0); kc.Parent = knob
+
+    local on = false
+    local function refresh()
+        TweenService:Create(rowLabel, TweenInfo.new(themeTweenTime), { TextColor3 = currentAccent }):Play()
+        TweenService:Create(tstroke, TweenInfo.new(themeTweenTime), { Color = currentAccent }):Play()
+        if on then
+            TweenService:Create(track, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentAccent }):Play()
+            TweenService:Create(knob, TweenInfo.new(0.15), { Position = UDim2.new(1, -21, 0.5, -9) }):Play()
+            TweenService:Create(knob, TweenInfo.new(themeTweenTime), { BackgroundColor3 = BLACK }):Play()
+        else
+            TweenService:Create(track, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentDim }):Play()
+            TweenService:Create(knob, TweenInfo.new(0.15), { Position = UDim2.new(0, 3, 0.5, -9) }):Play()
+            TweenService:Create(knob, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentAccent }):Play()
+        end
+    end
+    table.insert(switchRefreshers, refresh)
+    refresh()
+
+    track.MouseEnter:Connect(function()
+        TweenService:Create(tstroke, TweenInfo.new(0.15), { Transparency = 0 }):Play()
+    end)
+    track.MouseLeave:Connect(function()
+        TweenService:Create(tstroke, TweenInfo.new(0.15), { Transparency = 0.4 }):Play()
+    end)
+    track.MouseButton1Click:Connect(function()
+        on = not on
+        refresh()
+    end)
+end
+
+-- one visual slider row (drag the knob; value is display-only)
+local function makeSlider(name, order)
+    local row = Instance.new("Frame")
+    row.Name = "Slider_" .. name
+    row.LayoutOrder = order
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundTransparency = 1
+    row.Parent = switchHolder
+
+    local lbl = Instance.new("TextLabel")
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, -42, 0, 14)
+    lbl.Font = Enum.Font.Michroma
+    lbl.Text = name
+    lbl.TextSize = 11
+    lbl.TextColor3 = currentAccent
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local valLbl = Instance.new("TextLabel")
+    valLbl.BackgroundTransparency = 1
+    valLbl.Size = UDim2.new(0, 40, 0, 14)
+    valLbl.Position = UDim2.new(1, -40, 0, 0)
+    valLbl.Font = Enum.Font.Code
+    valLbl.Text = "50"
+    valLbl.TextSize = 11
+    valLbl.TextColor3 = currentAccent
+    valLbl.TextXAlignment = Enum.TextXAlignment.Right
+    valLbl.Parent = row
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(1, -16, 0, 6)
+    track.Position = UDim2.new(0, 8, 0, 22)
+    track.BackgroundColor3 = currentDim
+    track.BorderSizePixel = 0
+    track.Parent = row
+    local trc = Instance.new("UICorner"); trc.CornerRadius = UDim.new(1, 0); trc.Parent = track
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0.5, 0, 1, 0)
+    fill.BackgroundColor3 = currentAccent
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+    local flc = Instance.new("UICorner"); flc.CornerRadius = UDim.new(1, 0); flc.Parent = fill
+
+    local knob = Instance.new("TextButton")
+    knob.Size = UDim2.new(0, 14, 0, 14)
+    knob.AnchorPoint = Vector2.new(0.5, 0.5)
+    knob.Position = UDim2.new(0.5, 0, 0.5, 0)
+    knob.Text = ""
+    knob.AutoButtonColor = false
+    knob.BackgroundColor3 = currentAccent
+    knob.BorderSizePixel = 0
+    knob.Parent = track
+    local knc = Instance.new("UICorner"); knc.CornerRadius = UDim.new(1, 0); knc.Parent = knob
+
+    local dragging = false
+    local function setFromX(px)
+        local a = math.clamp((px - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
+        fill.Size = UDim2.new(a, 0, 1, 0)
+        knob.Position = UDim2.new(a, 0, 0.5, 0)
+        valLbl.Text = tostring(math.floor(a * 100))
+    end
+    knob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+        end
+    end)
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setFromX(input.Position.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and track.Parent and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            setFromX(input.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    local function refresh()
+        TweenService:Create(lbl,    TweenInfo.new(themeTweenTime), { TextColor3 = currentAccent }):Play()
+        TweenService:Create(valLbl, TweenInfo.new(themeTweenTime), { TextColor3 = currentAccent }):Play()
+        TweenService:Create(track,  TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentDim }):Play()
+        TweenService:Create(fill,   TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentAccent }):Play()
+        TweenService:Create(knob,   TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentAccent }):Play()
+    end
+    table.insert(switchRefreshers, refresh)
+    refresh()
+end
+
+-- one visual action button
+local function makeButton(name, order)
+    local btn = Instance.new("TextButton")
+    btn.Name = "Button_" .. name
+    btn.LayoutOrder = order
+    btn.Size = UDim2.new(1, 0, 0, 28)
+    btn.AutoButtonColor = false
+    btn.BackgroundColor3 = currentDim
+    btn.BackgroundTransparency = 0.15
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.Michroma
+    btn.Text = name
+    btn.TextSize = 12
+    btn.TextColor3 = currentAccent
+    btn.Parent = switchHolder
+    local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 8); bc.Parent = btn
+
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), { BackgroundTransparency = 0 }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), { BackgroundTransparency = 0.15 }):Play()
+    end)
+    btn.MouseButton1Click:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.08), { BackgroundColor3 = currentAccent, TextColor3 = BLACK }):Play()
+        task.wait(0.12)
+        TweenService:Create(btn, TweenInfo.new(0.2), { BackgroundColor3 = currentDim, TextColor3 = currentAccent }):Play()
+    end)
+
+    local function refresh()
+        TweenService:Create(btn, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentDim, TextColor3 = currentAccent }):Play()
+    end
+    table.insert(switchRefreshers, refresh)
+    refresh()
+end
+
+-- a section header (label + underline) used to group controls inside a tab
+local function makeSection(name, order)
+    local sec = Instance.new("Frame")
+    sec.Name = "Section_" .. name
+    sec.LayoutOrder = order
+    sec.Size = UDim2.new(1, 0, 0, 22)
+    sec.BackgroundTransparency = 1
+    sec.Parent = switchHolder
+
+    local lbl = Instance.new("TextLabel")
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, 0, 0, 15)
+    lbl.Font = Enum.Font.Code
+    lbl.Text = "// " .. name
+    lbl.TextSize = 11
+    lbl.TextColor3 = currentAccent
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = sec
+
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(1, 0, 0, 1)
+    line.Position = UDim2.new(0, 0, 1, -2)
+    line.BackgroundColor3 = currentAccent
+    line.BackgroundTransparency = 0.55
+    line.BorderSizePixel = 0
+    line.Parent = sec
+
+    local function refresh()
+        TweenService:Create(lbl,  TweenInfo.new(themeTweenTime), { TextColor3 = currentAccent }):Play()
+        TweenService:Create(line, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentAccent }):Play()
+    end
+    table.insert(switchRefreshers, refresh)
+    refresh()
+end
+
+local function buildSwitches(tabIndex)
+    switchRefreshers = {}
+    for _, child in ipairs(switchHolder:GetChildren()) do
+        if child:IsA("Frame") or child:IsA("TextButton") then child:Destroy() end
+    end
+    local names = TAB_SWITCHES[TAB_NAMES[tabIndex]] or {}
+    local order = 0
+    order += 1; makeSection("TOGGLES", order)
+    for _, n in ipairs(names) do
+        order += 1; makeSwitch(n, order)
+    end
+    order += 1; makeSection("OPTIONS", order)
+    order += 1; makeSlider("Aim Smoothness", order)
+    order += 1; makeButton("Execute", order)
+    switchHolder.CanvasPosition = Vector2.new(0, 0)
+end
+
+--// Tab visuals (no stroke on tab text) + selection
+local function updateTabVisual()
+    for i, t in ipairs(tabButtons) do
+        if i == activeTab then
+            TweenService:Create(t.button, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentAccent, BackgroundTransparency = 0, TextColor3 = BLACK }):Play()
+        else
+            TweenService:Create(t.button, TweenInfo.new(themeTweenTime), { BackgroundColor3 = currentDim, BackgroundTransparency = 0.2, TextColor3 = currentAccent }):Play()
+        end
+    end
+end
+
+local function selectTab(i)
+    activeTab = i
+    updateTabVisual()
+    buildSwitches(i)
+end
+
+for i, t in ipairs(tabButtons) do
+    t.button.MouseEnter:Connect(function()
+        if i ~= activeTab then
+            TweenService:Create(t.button, TweenInfo.new(0.15), { BackgroundTransparency = 0.05 }):Play()
+        end
+    end)
+    t.button.MouseLeave:Connect(function()
+        if i ~= activeTab then
+            TweenService:Create(t.button, TweenInfo.new(0.15), { BackgroundTransparency = 0.2 }):Play()
+        end
+    end)
+    t.button.MouseButton1Click:Connect(function()
+        selectTab(i)
+    end)
+end
+
+selectTab(1)
+
+--// Breathing border
+task.spawn(function()
+    while gui.Parent do
+        TweenService:Create(ms, TweenInfo.new(1.1, Enum.EasingStyle.Sine), { Thickness = 2.4 }):Play()
+        task.wait(1.1)
+        TweenService:Create(ms, TweenInfo.new(1.1, Enum.EasingStyle.Sine), { Thickness = 1.4 }):Play()
+        task.wait(1.1)
+    end
+end)
+
+--// Draggable helper (mouse + touch)
+local function makeDraggable(frame, handle)
+    handle = handle or frame
+    local dragging, dragStart, startPos
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+makeDraggable(main)
+
+--// ===== Mini logo button (hide / show) =====
+local mini = Instance.new("TextButton")
+mini.Name = "Mini"
+mini.Size = UDim2.new(0, 48, 0, 48)
+mini.Position = UDim2.new(0, 18, 0, 64)
+mini.BackgroundColor3 = BLACK
+mini.AutoButtonColor = false
+mini.Text = ""
+mini.Font = Enum.Font.Michroma
+mini.TextSize = 22
+mini.TextColor3 = WHITE
+mini.ClipsDescendants = true
+mini.Active = true
+mini.Visible = false
+mini.Parent = gui
+
+local mnc = Instance.new("UICorner"); mnc.CornerRadius = UDim.new(1, 0); mnc.Parent = mini
+local miniGrad = Instance.new("UIGradient")
+miniGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 34, 12)),
+    ColorSequenceKeypoint.new(1, BLACK),
+})
+miniGrad.Rotation = 90
+miniGrad.Parent = mini
+local miniStroke = Instance.new("UIStroke"); miniStroke.Color = WHITE; miniStroke.Thickness = 1.6; miniStroke.Transparency = 0.1; miniStroke.Parent = mini
+addLaserStroke(miniStroke, 2.4) -- animated laser ring on the logo (matches main panel)
+
+local miniScale = Instance.new("UIScale"); miniScale.Scale = responsiveScale; miniScale.Parent = mini
+
+-- logo letter on top (galaxy removed; laser ring kept via addLaserStroke above)
+local nLabel = Instance.new("TextLabel")
+nLabel.Name = "Logo"
+nLabel.BackgroundTransparency = 1
+nLabel.Size = UDim2.new(1, 0, 1, 0)
+nLabel.Font = Enum.Font.Michroma
+nLabel.Text = "B"
+nLabel.TextSize = 22
+nLabel.TextColor3 = WHITE
+nLabel.ZIndex = 3
+nLabel.Parent = mini
+
+-- Bold laser ring around the circular button (the rotating laser comes from addLaserStroke above)
+local hubShown = true
+miniStroke.Thickness = 2.8
+miniStroke.Transparency = 0
+
+-- icon resting colour follows the live theme (green / red)
+nLabel.TextColor3 = currentAccent
+
+-- HEAVY hacker GLITCH on the "B" (fast jitter + glyph swap + rotation + colour flicker).
+local GLITCH = { "B", "8", "ß", "Ƀ", "฿", "13", "|3", "R", "#", "%", "<>", "??" }
+local FLICKER = { GREEN, RED, Color3.fromRGB(255, 255, 255) }
+task.spawn(function()
+    while gui.Parent do
+        local restGap = hubShown and math.random(2, 7) / 10 or math.random(8, 16) / 10
+        task.wait(restGap)
+        local bursts = hubShown and math.random(4, 8) or math.random(2, 3)
+        for _ = 1, bursts do
+            nLabel.Text = GLITCH[math.random(#GLITCH)]
+            nLabel.TextColor3 = FLICKER[math.random(#FLICKER)]
+            nLabel.Position = UDim2.new(0, math.random(-4, 4), 0, math.random(-4, 4))
+            nLabel.Rotation = math.random(-10, 10)
+            task.wait(0.03)
+        end
+        nLabel.Text = "B"
+        nLabel.TextColor3 = currentAccent
+        nLabel.Position = UDim2.new(0, 0, 0, 0)
+        nLabel.Rotation = 0
+        task.wait(0.04)
+    end
+end)
+
+-- hover just brightens the logo (no scaling)
+mini.MouseEnter:Connect(function()
+    TweenService:Create(nLabel, TweenInfo.new(0.15), { TextTransparency = 0 }):Play()
+    TweenService:Create(miniStroke, TweenInfo.new(0.15), { Transparency = 0 }):Play()
+end)
+mini.MouseLeave:Connect(function()
+    TweenService:Create(nLabel, TweenInfo.new(0.15), { TextTransparency = 0 }):Play()
+end)
+
+--// Show / hide the hub with smooth animation
+local uiVisible = true
+local function showHub()
+    uiVisible = true
+    hubShown = true  -- switch mini to ON animation
+    main.Visible = true
+    uiScale.Scale = responsiveScale * 0.6
+    main.BackgroundTransparency = 1
+    TweenService:Create(uiScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = responsiveScale }):Play()
+    TweenService:Create(main, TweenInfo.new(0.3), { BackgroundTransparency = 0 }):Play()
+    TweenService:Create(mini, TweenInfo.new(0.35, Enum.EasingStyle.Back), { Rotation = 0 }):Play()
+end
+local function hideHub()
+    uiVisible = false
+    hubShown = false  -- switch mini to OFF animation
+    local t = TweenService:Create(uiScale, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = responsiveScale * 0.6 })
+    TweenService:Create(main, TweenInfo.new(0.25), { BackgroundTransparency = 1 }):Play()
+    t:Play()
+    t.Completed:Once(function()
+        if not uiVisible then main.Visible = false end
+    end)
+    TweenService:Create(mini, TweenInfo.new(0.35, Enum.EasingStyle.Back), { Rotation = 180 }):Play()
+end
+local function toggleHub()
+    if uiVisible then hideHub() else showHub() end
+end
+
+--// Mini button: drag to move, TAP to hide/show
+do
+    local dragging, moved, dragStart, startPos
+    mini.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            dragStart = input.Position
+            startPos = mini.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 6 then moved = true end
+            mini.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            dragging = false
+            if not moved then toggleHub() end -- tap = hide/show
+        end
+    end)
+end
+
+--// Intro pop-in
+main.BackgroundTransparency = 1
+uiScale.Scale = responsiveScale * 0.6
+task.spawn(function()
+    task.wait(UI_DELAY)
+    main.Visible = true
+    mini.Visible = true
+    TweenService:Create(uiScale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = responsiveScale }):Play()
+    TweenService:Create(main, TweenInfo.new(0.35), { BackgroundTransparency = 0 }):Play()
+end)
+
+--// Keep the UI correctly sized when the window / screen / orientation changes (PC, mobile, tablet…)
+local function applyResponsiveScale()
+    responsiveScale = computeScale()
+    miniScale.Scale = responsiveScale
+    if uiVisible then
+        uiScale.Scale = responsiveScale
+    end
+end
+if camera then
+    camera:GetPropertyChangedSignal("ViewportSize"):Connect(applyResponsiveScale)
+end
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    camera = workspace.CurrentCamera
+    if camera then
+        camera:GetPropertyChangedSignal("ViewportSize"):Connect(applyResponsiveScale)
+    end
+    applyResponsiveScale()
+end)
+
+--// ===== Red / Green theme cycler =====
+-- Retint the whole UI to a target accent colour (with a dim variant for tracks / inactive tabs).
+local function applyTheme(accent, time)
+    currentAccent = accent
+    currentDim = Color3.new(accent.R * 0.18, accent.G * 0.18, accent.B * 0.18)
+    local ti = TweenInfo.new(time or 0.8, Enum.EasingStyle.Sine)
+
+    -- static themed elements
+    TweenService:Create(ms,         ti, { Color = accent }):Play()
+    TweenService:Create(miniStroke, ti, { Color = accent }):Play()
+    TweenService:Create(glow,       ti, { ImageColor3 = accent }):Play()
+    TweenService:Create(titleLbl,   ti, { TextColor3 = accent }):Play()
+    TweenService:Create(divider,    ti, { BackgroundColor3 = accent }):Play()
+    TweenService:Create(switchHolder, ti, { ScrollBarImageColor3 = accent }):Play()
+
+    -- matrix code-rain columns
+    for _, d in ipairs(matrix:GetDescendants()) do
+        if d:IsA("TextLabel") then
+            TweenService:Create(d, ti, { TextColor3 = accent }):Play()
+        end
+    end
+
+    -- live tabs + switches (use the same slow tween so they change colour together with everything else)
+    themeTweenTime = time or 0.8
+    updateTabVisual()
+    for _, fn in ipairs(switchRefreshers) do
+        fn()
+    end
+    themeTweenTime = 0.15
+end
+
+-- Glitch sequence: scramble all text -> shake -> sudden 1s blackout -> (caller tweens colour).
+local GLITCH_CHARS = "01001011<>#%@/\\|=+*?ABCDEF9824XZ"
+local function scrambleText(len)
+    local t = {}
+    for _ = 1, math.max(2, len) do
+        local i = math.random(1, #GLITCH_CHARS)
+        t[#t + 1] = GLITCH_CHARS:sub(i, i)
+    end
+    return table.concat(t)
+end
+
+local function glitchMain()
+    -- snapshot the panel's text so we can restore it after the corruption
+    local labels = {}
+    for _, d in ipairs(main:GetDescendants()) do
+        if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Name ~= "Stream" and #d.Text > 0 then
+            labels[#labels + 1] = { obj = d, text = d.Text }
+        end
+    end
+
+    -- PHASE 1: glitch every number & letter (rapid scramble) ~3.5s
+    for _ = 1, 70 do
+        for _, e in ipairs(labels) do
+            e.obj.Text = scrambleText(#e.text)
+        end
+        task.wait(0.05)
+    end
+
+    -- PHASE 2: shaking + the background text breaks apart and flies around letter-by-letter ~5.5s
+    matrix.ClipsDescendants = false
+    matrixFling = true
+
+    -- spawn single-character "particles" that peel off and fly around one-by-one
+    local FLY = "01ABXZKLMN#%@<>*/=0189"
+    local flinging = true
+    local particles = {}
+    for _ = 1, 80 do
+        task.spawn(function()
+            task.wait(math.random(0, 200) / 100)  -- staggered so letters leave one-by-one
+            if not flinging then return end
+            local k = math.random(1, #FLY)
+            local ch = Instance.new("TextLabel")
+            ch.Name = "FlingChar"
+            ch.BackgroundTransparency = 1
+            ch.Size = UDim2.fromOffset(16, 18)
+            ch.Font = Enum.Font.Code
+            ch.TextSize = 13
+            ch.TextColor3 = currentAccent
+            ch.Text = FLY:sub(k, k)
+            ch.Position = UDim2.fromScale(math.random(20, 80) / 100, math.random(20, 80) / 100)
+            ch.ZIndex = 2
+            ch.Parent = matrix
+            particles[#particles + 1] = ch
+            while flinging do
+                local tw = TweenService:Create(ch, TweenInfo.new(math.random(4, 9) / 10, Enum.EasingStyle.Quad), {
+                    Position = UDim2.fromScale(math.random(-30, 130) / 100, math.random(-50, 150) / 100),
+                    Rotation = math.random(-180, 180),
+                })
+                tw:Play()
+                tw.Completed:Wait()
+            end
+        end)
+    end
+
+    -- ERROR 404 warning that pops up (flashing red) for the last ~3s before the blackout
+    local errorWarn
+    task.spawn(function()
+        task.wait(2.5)
+        if not flinging then return end
+        local w = Instance.new("Frame")
+        w.Name = "Error404"
+        w.AnchorPoint = Vector2.new(0.5, 0.5)
+        w.Position = UDim2.fromScale(0.5, 0.5)
+        w.Size = UDim2.fromOffset(190, 84)
+        w.BackgroundColor3 = Color3.fromRGB(26, 22, 0)
+        w.BackgroundTransparency = 0.08
+        w.ZIndex = 50
+        w.Parent = main
+        local wc = Instance.new("UICorner"); wc.CornerRadius = UDim.new(0, 8); wc.Parent = w
+        local wstk = Instance.new("UIStroke"); wstk.Color = Color3.fromRGB(255, 210, 30); wstk.Thickness = 2.5; wstk.Parent = w
+        local wt = Instance.new("TextLabel")
+        wt.BackgroundTransparency = 1
+        wt.Size = UDim2.fromScale(1, 1)
+        wt.Font = Enum.Font.Code
+        wt.TextSize = 20
+        wt.TextColor3 = Color3.fromRGB(255, 215, 40)
+        wt.Text = "⚠ ERROR 404\n! WARNING !"
+        wt.ZIndex = 51
+        wt.Parent = w
+        errorWarn = w
+        while w.Parent do
+            local off = (wt.TextTransparency > 0.3) and 0 or 0.65
+            wt.TextTransparency = off
+            wstk.Transparency = off
+            w.BackgroundTransparency = 0.08 + off * 0.35
+            task.wait(0.16)
+        end
+    end)
+
+    local base = main.Position
+    for _ = 1, 137 do
+        main.Position = base + UDim2.fromOffset(math.random(-16, 16), math.random(-14, 14))
+        -- (no rotation: Roblox clipping breaks while rotated, which let the switches leak out of the UI)
+        ms.Transparency = math.random(0, 80) / 100
+        for _, e in ipairs(labels) do
+            e.obj.Text = scrambleText(#e.text)
+        end
+        task.wait(0.04)
+    end
+    main.Position = base
+    main.Rotation = 0
+    ms.Transparency = 0.15
+
+    -- stop & clean up the flying letters + the error popup
+    flinging = false
+    if errorWarn then errorWarn:Destroy() end
+    for _, p in ipairs(particles) do
+        p:Destroy()
+    end
+    matrixFling = false
+    matrix.ClipsDescendants = true
+
+    -- restore the real text
+    for _, e in ipairs(labels) do
+        e.obj.Text = e.text
+    end
+
+    -- (no blackout) the glitch ends here; the caller eases straight into the new colour
+end
+
+-- Every random interval (always under 1 minute): glitch, then tween into the other colour.
+task.spawn(function()
+    local nextColor = RED  -- starts green; first flip goes to red
+    while gui.Parent do
+        task.wait(math.random(22, 55))
+        glitchMain()
+
+        -- FAST: shrink the whole UI away (disappear)
+        TweenService:Create(uiScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
+        TweenService:Create(miniScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
+        task.wait(0.22)
+
+        -- swap to the new colour while it's hidden
+        applyTheme(nextColor, 0.4)
+
+        -- SLOW: bring the whole UI back in (appear)
+        TweenService:Create(uiScale, TweenInfo.new(2.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = responsiveScale }):Play()
+        TweenService:Create(miniScale, TweenInfo.new(2.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = responsiveScale }):Play()
+
+        nextColor = (nextColor == RED) and GREEN or RED
+    end
+end)
