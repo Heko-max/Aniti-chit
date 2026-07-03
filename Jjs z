@@ -42,6 +42,7 @@ local Net             = RepStorage:WaitForChild("NetworkComm")
 local StartSkill      = Net.SkillService.StartSkilll_Method
 local DamageCharacter = Net.CombatService.DamageCharacter_Method
 local AcceptQuest     = Net.QuestService.AcceptQuest_Method
+local DataChanged     = Net.PlayerService.DataChanged_Signal -- fired to enable CanBlackFlash
 
 -- Auto Quest: full quest list -> { remote id, selector name }. Add/edit entries anytime.
 local QUEST_DATA = {
@@ -62,6 +63,7 @@ local QUEST_DATA = {
     {"WoundedSpy3","Lv1460"},{"Miwa1","Lv1460"},{"Miwa2","Lv1480"},{"JujutsuCourier1","Lv1500"},
     {"JujutsuCourier2","Lv1550"},{"JujutsuCourier3","Lv1600"},{"CurseHunter1","Lv1650"},{"CurseHunter2","Lv1700"},
     {"CurseHunter3","Lv1750"},
+    {"DisgracedSorcerer1","Lv1850"},{"DisgracedSorcerer2","Lv1900"},{"DisgracedSorcerer3","Lv1950"},
 }
 local QUEST_LIST = {} -- ids only (used by Auto Next cycling)
 for _, q in ipairs(QUEST_DATA) do table.insert(QUEST_LIST, q[1]) end
@@ -208,6 +210,51 @@ task.spawn(function()
     end
 end)
 
+-- Fast Black Flash: fires BlackFlashSkill1 on every NPC in range (AOE, like Fast Attack).
+-- The game only lets you black flash when the client flag CanBlackFlash is true, so we
+-- keep re-firing the DataChanged signal (client-side only) to hold that flag on.
+local BlackFlashOn = false
+local function enableBlackFlash()
+    pcall(function()
+        firesignal(DataChanged.OnClientEvent, "Flags", {
+            CanBlackFlash = true,
+            BlackFlashSkill = "BlackFlashSkill1",
+        })
+    end)
+end
+local function blackFlashList(targets, myModel, myHRP)
+    if not myModel or not myHRP or #targets == 0 then return end
+    local first = targets[1]:FindFirstChild("HumanoidRootPart")
+    local dir = (first and (first.Position - myHRP.Position).Unit) or myHRP.CFrame.LookVector
+    task.spawn(function() pcall(function()
+        StartSkill:InvokeServer("BlackFlashSkill1", myModel, dir, nil, 2)
+    end) end)
+    task.spawn(function() pcall(function()
+        DamageCharacter:InvokeServer(targets, true, {
+            Knockback = { Duration = 0.2, Distance = 20 },
+            WindowID = myModel.Name .. "_BlackFlashSkill1",
+            LocalCharacter = myModel,
+            SkillID = "BlackFlashSkill1",
+        })
+    end) end)
+end
+-- keep the black-flash flag enabled while Black Flash OR Kill Aura is on (cheap, 1x/sec)
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if BlackFlashOn or KillOn then enableBlackFlash() end
+        task.wait(1)
+    end
+end)
+-- fire the black flash AOE with NO delay (yields just 1 frame) for maximum speed
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if BlackFlashOn then
+            task.spawn(function() pcall(function() blackFlashList(collectTargets()) end) end)
+        end
+        task.wait()
+    end
+end)
+
 -- computes WHERE YOU STAND relative to the target NPC (Top / Front / Bottom + X/Y/Z offset)
 local function auraGoal(nh)
     local base = nh.Position
@@ -243,17 +290,26 @@ CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function(dt)
     local goal = auraGoal(nh)
     pcall(function()
         hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.CFrame = hrp.CFrame:Lerp(goal, math.clamp(dt * 28, 0, 1))
+        hrp.CFrame = goal -- instant teleport (no tween)
     end)
 end)
 
 -- attack loop (kept separate from movement so movement stays smooth)
+-- ALTERNATES punch and black flash each tick so they don't fight for the skill slot in the
+-- same frame (that let only punch land). Re-arms CanBlackFlash right before each BF cast.
+local killBFtick = 0
 task.spawn(function()
     while getgenv().NexoHubSession == SESSION do
         if KillOn then
             local n, mm, hrp = getNearest(AURA_RANGE)
             if n and hrp then
-                task.spawn(function() pcall(function() attackList({n}, mm, hrp) end) end)
+                killBFtick = killBFtick + 1
+                if killBFtick % 2 == 0 then
+                    enableBlackFlash()
+                    task.spawn(function() pcall(function() blackFlashList({n}, mm, hrp) end) end)
+                else
+                    task.spawn(function() pcall(function() attackList({n}, mm, hrp) end) end)
+                end
             end
         end
         task.wait(0.03)
@@ -353,7 +409,7 @@ CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function(dt)
         local goal = auraGoal(far)
         pcall(function()
             hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.CFrame = hrp.CFrame:Lerp(goal, math.clamp(dt * 28, 0, 1))
+            hrp.CFrame = goal -- instant teleport (no tween)
         end)
     end
 end)
@@ -510,7 +566,7 @@ task.spawn(function()
             questNPCs = {}
             fastQuestFrozenPos = nil -- NPCs all dead; unfreeze player for next wave
         end
-        task.wait(0.08)
+        task.wait(0.03) -- fast retarget: teleport chases the next mob almost instantly
     end
 end)
 
@@ -520,7 +576,7 @@ task.spawn(function()
         if QuestOn or AutoNext then -- BringQuestOn requires QuestOn, no extra check
             pcall(function() AcceptQuest:InvokeServer(currentQuestId()) end)
         end
-        task.wait(0.3)
+        task.wait(0.1) -- fast re-accept: grabs the next quest almost instantly after completion
     end
 end)
 
@@ -564,39 +620,58 @@ CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function(dt)
         local goal = auraGoal(nearest)
         pcall(function()
             hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.CFrame = hrp.CFrame:Lerp(goal, math.clamp(dt * 28, 0, 1))
+            hrp.CFrame = goal -- instant teleport (no tween)
         end)
         questHoverPos = hrp.CFrame -- save every frame for hover when NPCs die
     end
 end)
 
--- attack the cached quest NPCs
+-- attack the cached quest NPCs -- fires BOTH punch AND black flash every cycle for MAX damage,
+-- offset by ONE frame so they never collide in the same frame (which blocked BF).
+-- Runs at RenderStepped speed => roughly 2x the old damage rate.
 task.spawn(function()
     while getgenv().NexoHubSession == SESSION do
         if QuestOn and #questNPCs > 0 and questMyModel and questMyHRP then
+            enableBlackFlash()
+            task.spawn(function() pcall(function() blackFlashList(questNPCs, questMyModel, questMyHRP) end) end)
+            RunService.RenderStepped:Wait()
             task.spawn(function() pcall(function() attackList(questNPCs, questMyModel, questMyHRP) end) end)
         end
-        task.wait(0.03)
+        RunService.RenderStepped:Wait()
     end
 end)
 
--- NOCLIP: cache body parts so GetDescendants only runs once per character (not 60x/sec = lag fix)
+-- NOCLIP: active ONLY while a movement feature (Kill Aura / Auto Quest / Reach & Kill) is on.
+-- Stores each part's ORIGINAL CanCollide and restores it the moment you turn everything off,
+-- so noclip no longer stays stuck on after you disable the features.
 local noclipCache, noclipModel = {}, nil
+local noclipActive = false
 CONNS[#CONNS+1] = RunService.Stepped:Connect(function()
     if getgenv().NexoHubSession ~= SESSION then return end
-    if not (KillOn or QuestOn or ReachOn) then return end
+    local shouldNoclip = KillOn or QuestOn or ReachOn
+    if not shouldNoclip then
+        -- everything off: restore original collision ONCE, then stop noclipping
+        if noclipActive then
+            for _, e in ipairs(noclipCache) do
+                if e.part and e.part.Parent then pcall(function() e.part.CanCollide = e.orig end) end
+            end
+            noclipActive = false
+        end
+        return
+    end
     local mdl = getModel()
-    if not mdl then noclipCache = {} noclipModel = nil return end
+    if not mdl then noclipCache = {} noclipModel = nil noclipActive = false return end
     if mdl ~= noclipModel then -- rebuild cache only when character changes
         noclipModel = mdl
         noclipCache = {}
         for _, p in ipairs(mdl:GetDescendants()) do
-            if p:IsA("BasePart") then table.insert(noclipCache, p) end
+            if p:IsA("BasePart") then table.insert(noclipCache, { part = p, orig = p.CanCollide }) end
         end
     end
-    for _, p in ipairs(noclipCache) do
-        if p and p.Parent then p.CanCollide = false end -- no pcall overhead
+    for _, e in ipairs(noclipCache) do
+        if e.part and e.part.Parent then e.part.CanCollide = false end
     end
+    noclipActive = true
 end)
 
 --========================================================--
@@ -677,6 +752,55 @@ pcall(function()
     end)
 end)
 
+-- Goto LumenConverter: locate that specific NPC, then smoothly tween the player to it
+local function findLumen()
+    local target = "lumenconverter"
+    -- 1) direct model-name match in the server folders
+    for _, folder in ipairs({NPCsF, PlayersF}) do
+        if folder then
+            for _, m in ipairs(folder:GetChildren()) do
+                if string.lower(m.Name) == target then
+                    local h = m:FindFirstChild("HumanoidRootPart")
+                    if h then return h.Position end
+                end
+            end
+        end
+    end
+    -- 2) client rig name-tag match (names live on client rigs, not server models)
+    local ClientF = workspace.Characters:FindFirstChild("Client")
+    if ClientF then
+        for _, d in ipairs(ClientF:GetDescendants()) do
+            if d:IsA("TextLabel") and string.find(string.lower(d.Text), target, 1, true) then
+                local rig = d:FindFirstAncestorWhichIsA("Model")
+                local h = rig and rig:FindFirstChild("HumanoidRootPart")
+                if h then return h.Position end
+            end
+        end
+    end
+    -- 3) fallback: any model named LumenConverter anywhere in workspace
+    for _, m in ipairs(workspace:GetDescendants()) do
+        if m:IsA("Model") and string.lower(m.Name) == target then
+            local h = m:FindFirstChild("HumanoidRootPart")
+            if h then return h.Position end
+        end
+    end
+    return nil
+end
+
+local function tweenToLumen()
+    local mdl = getModel()
+    local hrp = mdl and mdl:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local pos = findLumen()
+    if not pos then return false end
+    -- instant teleport straight to the NPC (no tween)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))
+    end)
+    return true
+end
+
 --========================================================--
 --  SMOOTH GUI
 --========================================================--
@@ -693,7 +817,7 @@ ScreenGui.Parent = parentGui
 local Main = Instance.new("ScrollingFrame")
 Main.Size = UDim2.new(0, 270, 0, 440)          -- visible height (the panel scrolls)
 Main.Position = UDim2.new(0.5, -135, 0.05, 0)
-Main.CanvasSize = UDim2.new(0, 0, 0, 708)       -- full content height
+Main.CanvasSize = UDim2.new(0, 0, 0, 788)       -- full content height
 Main.ScrollBarThickness = 6
 Main.ScrollBarImageColor3 = Color3.fromRGB(0, 200, 255)
 Main.ScrollingDirection = Enum.ScrollingDirection.Y
@@ -742,12 +866,13 @@ local function makeToggle(labelText, y, onToggle)
 end
 
 makeToggle("⚡ Fast Attack", 42, function(on) FastOn = on end)
-makeToggle("🎯 Kill Nearest Aura", 74, function(on) KillOn = on end)
-makeToggle("🧲 Bring NPCs", 106, function(on) BringOn = on if not on and not BringAllOn then restoreBrought() end end)
-makeToggle("🌐 Bring Every NPC", 138, function(on) BringAllOn = on if not on and not BringOn then restoreBrought() end end)
-makeToggle("🔪 Reach & Kill", 170, function(on) ReachOn = on end)
-makeToggle("📜 Auto Quest", 202, function(on) QuestOn = on if on then task.spawn(function() pcall(function() AcceptQuest:InvokeServer(currentQuestId()) end) end) end end)
-local setFlyToggle = makeToggle("🕊 Fly (V)", 234, function(on)
+makeToggle("⚫ Fast Black Flash", 74, function(on) BlackFlashOn = on end)
+makeToggle("🎯 Kill Nearest Aura", 106, function(on) KillOn = on end)
+makeToggle("🧲 Bring NPCs", 138, function(on) BringOn = on if not on and not BringAllOn then restoreBrought() end end)
+makeToggle("🌐 Bring Every NPC", 170, function(on) BringAllOn = on if not on and not BringOn then restoreBrought() end end)
+makeToggle("🔪 Reach & Kill", 202, function(on) ReachOn = on end)
+makeToggle("📜 Auto Quest", 234, function(on) QuestOn = on if on then task.spawn(function() pcall(function() AcceptQuest:InvokeServer(currentQuestId()) end) end) end end)
+local setFlyToggle = makeToggle("🕊 Fly (V)", 266, function(on)
     if on then startFly() else stopFly() end
 end)
 
@@ -819,13 +944,13 @@ local function makeSlider(labelText, y, minV, maxV, initV, onChange)
     return function(newV) setRel((newV - minV) / (maxV - minV)) end
 end
 
-makeSlider("Fly Speed", 264, MIN_SPEED, MAX_SPEED, SPEED, function(v) SPEED = v end)
-makeSlider("Aura Range", 302, 50, 2000, AURA_RANGE, function(v) AURA_RANGE = v end)
-makeSlider("Bring Range", 340, 50, 2000, BRING_RANGE, function(v) BRING_RANGE = v end)
+makeSlider("Fly Speed", 296, MIN_SPEED, MAX_SPEED, SPEED, function(v) SPEED = v end)
+makeSlider("Aura Range", 334, 50, 2000, AURA_RANGE, function(v) AURA_RANGE = v end)
+makeSlider("Bring Range", 372, 50, 2000, BRING_RANGE, function(v) BRING_RANGE = v end)
 
 -- Aura Position mode: Top / Front / Bottom
 local PosLabel = Instance.new("TextLabel")
-PosLabel.Size = UDim2.new(1, -36, 0, 16) PosLabel.Position = UDim2.new(0, 18, 0, 376)
+PosLabel.Size = UDim2.new(1, -36, 0, 16) PosLabel.Position = UDim2.new(0, 18, 0, 408)
 PosLabel.BackgroundTransparency = 1 PosLabel.Text = "Aura Position"
 PosLabel.Font = Enum.Font.GothamMedium PosLabel.TextSize = 13
 PosLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
@@ -840,7 +965,7 @@ local function refreshModes()
 end
 local function makeModeBtn(name, idx)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 74, 0, 26) b.Position = UDim2.new(0, 18 + (idx - 1) * 80, 0, 396)
+    b.Size = UDim2.new(0, 74, 0, 26) b.Position = UDim2.new(0, 18 + (idx - 1) * 80, 0, 428)
     b.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
     b.Text = name b.Font = Enum.Font.GothamBold b.TextSize = 12
     b.TextColor3 = Color3.fromRGB(235, 235, 235) b.AutoButtonColor = true b.Parent = Main
@@ -854,15 +979,15 @@ makeModeBtn("Bottom", 3)
 refreshModes()
 
 -- X / Y / Z offset sliders for fine-tuning the Aura position
-makeSlider("Offset X", 430, -200, 200, OX, function(v) OX = v end)
-local setOY = makeSlider("Offset Y", 468, -200, 200, OY, function(v) OY = v end)
-makeSlider("Offset Z", 506, -200, 200, OZ, function(v) OZ = v end)
+makeSlider("Offset X", 462, -200, 200, OX, function(v) OX = v end)
+local setOY = makeSlider("Offset Y", 500, -200, 200, OY, function(v) OY = v end)
+makeSlider("Offset Z", 538, -200, 200, OZ, function(v) OZ = v end)
 
 -- up / down (hold) for fly
 local function makeHoldBtn(text, xScale, key)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(0.5, -24, 0, 30)
-    b.Position = UDim2.new(xScale, xScale == 0 and 18 or 6, 0, 552)
+    b.Position = UDim2.new(xScale, xScale == 0 and 18 or 6, 0, 584)
     b.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
     b.Text = text b.Font = Enum.Font.GothamBold b.TextSize = 13
     b.TextColor3 = Color3.fromRGB(235, 235, 235) b.AutoButtonColor = true b.Parent = Main
@@ -879,7 +1004,7 @@ makeHoldBtn("▼ Down", 0.5, "Down")
 
 -- Auto Quest: searchable + scrollable quest selector
 local QuestBtn = Instance.new("TextButton")
-QuestBtn.Size = UDim2.new(1, -36, 0, 26) QuestBtn.Position = UDim2.new(0, 18, 0, 588)
+QuestBtn.Size = UDim2.new(1, -36, 0, 26) QuestBtn.Position = UDim2.new(0, 18, 0, 620)
 QuestBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45) QuestBtn.AutoButtonColor = true
 QuestBtn.Font = Enum.Font.GothamBold QuestBtn.TextSize = 12
 QuestBtn.TextColor3 = Color3.fromRGB(0, 210, 255)
@@ -890,7 +1015,7 @@ updateQuestLabel = function() QuestBtn.Text = "Quest: " .. currentQuestName() ..
 
 -- dropdown panel (opens upward; overlays the hub while open)
 local Dropdown = Instance.new("Frame")
-Dropdown.Size = UDim2.new(1, -36, 0, 250) Dropdown.Position = UDim2.new(0, 18, 0, 332)
+Dropdown.Size = UDim2.new(1, -36, 0, 250) Dropdown.Position = UDim2.new(0, 18, 0, 364)
 Dropdown.BackgroundColor3 = Color3.fromRGB(22, 22, 30) Dropdown.BorderSizePixel = 0
 Dropdown.Visible = false Dropdown.ZIndex = 50 Dropdown.Parent = Main
 local ddc = Instance.new("UICorner") ddc.CornerRadius = UDim.new(0, 8) ddc.Parent = Dropdown
@@ -948,14 +1073,33 @@ Search:GetPropertyChangedSignal("Text"):Connect(function()
     if Dropdown.Visible then buildList(Search.Text) end
 end)
 
-makeToggle("🔁 Auto Next Quest", 620, function(on) AutoNext = on end)
-makeToggle("⚡ Fast Quest [NOT REC]", 652, function(on)
+makeToggle("🔁 Auto Next Quest", 652, function(on) AutoNext = on end)
+makeToggle("⚡ Fast Quest [NOT REC]", 684, function(on)
     FastQuestOn = on
     if not on then fastQuestBrought = {} fastQuestFrozenPos = nil end
 end)
+
+-- Goto LumenConverter button: one click smoothly tweens you to that NPC
+local LumenBtn = Instance.new("TextButton")
+LumenBtn.Size = UDim2.new(1, -36, 0, 28) LumenBtn.Position = UDim2.new(0, 18, 0, 718)
+LumenBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45) LumenBtn.AutoButtonColor = true
+LumenBtn.Font = Enum.Font.GothamBold LumenBtn.TextSize = 12
+LumenBtn.TextColor3 = Color3.fromRGB(0, 210, 255)
+LumenBtn.Text = "✨ Goto LumenConverter"
+LumenBtn.Parent = Main
+local lbc = Instance.new("UICorner") lbc.CornerRadius = UDim.new(0, 8) lbc.Parent = LumenBtn
+LumenBtn.MouseButton1Click:Connect(function()
+    if tweenToLumen() then
+        LumenBtn.Text = "✨ Teleported!"
+    else
+        LumenBtn.Text = "❌ LumenConverter not found"
+    end
+    task.delay(1.4, function() LumenBtn.Text = "✨ Goto LumenConverter" end)
+end)
+
 -- status line
 local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, -20, 0, 16) Status.Position = UDim2.new(0, 10, 0, 682)
+Status.Size = UDim2.new(1, -20, 0, 16) Status.Position = UDim2.new(0, 10, 0, 756)
 Status.BackgroundTransparency = 1 Status.Text = "Ready"
 Status.Font = Enum.Font.Gotham Status.TextSize = 11
 Status.TextColor3 = Color3.fromRGB(150, 150, 160)
@@ -971,6 +1115,7 @@ task.spawn(function()
         if ReachOn then table.insert(parts, "Reach") end
         if QuestOn then table.insert(parts, "Quest") end
         if FastQuestOn then table.insert(parts, "FastQ") end
+        if BlackFlashOn then table.insert(parts, "BF") end
         if flying then table.insert(parts, "Fly") end
         local active = #parts > 0 and table.concat(parts, "+") or "OFF"
         Status.Text = active .. "  |  targets: " .. #t
