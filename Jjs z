@@ -1,0 +1,1003 @@
+--========================================================--
+--  🔥 NEXO HUB 🔥  |  Fast Attack + Kill Aura + Fly
+--  Combat game (SkillService punch + BodyVelocity fly)
+--========================================================--
+
+-- Clean up any previous run so re-executing does NOT stack loops/connections (that caused the lag)
+getgenv().NexoHubLoaded = false -- stops loops from older script versions
+if getgenv().NexoHub and getgenv().NexoHub.stop then pcall(getgenv().NexoHub.stop) end
+getgenv().NexoHubSession = (getgenv().NexoHubSession or 0) + 1
+local SESSION = getgenv().NexoHubSession
+local CONNS = {}
+getgenv().NexoHub = { stop = function()
+    for _, cc in ipairs(CONNS) do pcall(function() cc:Disconnect() end) end
+    CONNS = {}
+end }
+task.wait(0.15)
+
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local RepStorage   = game:GetService("ReplicatedStorage")
+local UserInput    = game:GetService("UserInputService")
+local LocalPlayer  = Players.LocalPlayer
+
+-- // Config
+local ATTACK_RANGE = 150    -- fast attack range (studs)
+local AURA_RANGE   = 500    -- kill aura range (studs)
+local BRING_RANGE  = 500    -- bring range (studs)
+local BRING_OFFSET = 4      -- how tightly brought NPCs stack around you
+local AURA_MODE    = "Front" -- Kill Aura spot vs NPC: "Top" / "Front" / "Bottom"
+local OX, OY, OZ   = 0, 0, 0 -- manual X/Y/Z offset for the Kill Aura spot
+local QUEST_TARGET = "" -- manual target-name override; leave "" to auto-read from the quest tracker
+local TICK         = 0      -- delay between attack bursts (0 = fastest)
+local HIT_PLAYERS  = false   -- also hit enemy players? (false = NPCs only)
+local SPEED        = 150    -- fly speed
+local MIN_SPEED    = 0
+local MAX_SPEED    = 400
+local TOGGLE_KEY   = Enum.KeyCode.V   -- fly hotkey
+
+-- // Remotes
+local Net             = RepStorage:WaitForChild("NetworkComm")
+local StartSkill      = Net.SkillService.StartSkilll_Method
+local DamageCharacter = Net.CombatService.DamageCharacter_Method
+local AcceptQuest     = Net.QuestService.AcceptQuest_Method
+
+-- Auto Quest: full quest list -> { remote id, selector name }. Add/edit entries anytime.
+local QUEST_DATA = {
+    {"Bully1","Lv0"},{"Bully2","Lv10"},{"q2mob1","Lv25"},{"q2mob2","Lv40"},
+    {"q3mob1","Lv55"},{"q3mob2","Lv70"},{"q5mob1","Lv85"},{"q5mob2","Lv100"},
+    {"CursedFighter","Lv115"},{"CursedFighter2","Lv130"},{"q6mob1","Lv150"},{"q6mob2","Lv170"},
+    {"ShoreCrawler1","Lv200"},{"ShoreCrawler2","Lv220"},{"DeepSeaCurse","Lv240"},{"Diver1","Lv270"},
+    {"Diver2","Lv300"},{"CursedMonster","Lv320"},{"CursedSpirit1","Lv350"},{"CursedSpirit2","Lv370"},
+    {"CursedBeast","Lv400"},{"CursedMonster1","Lv430"},{"CursedMonster2","Lv450"},{"CurseUser","Lv470"},
+    {"TransfiguredMonster1","Lv500"},{"TransfiguredMonster2","Lv530"},{"Granny1","Lv550"},{"Granny2","Lv570"},
+    {"Granny3","Lv600"},{"Manager1","Lv630"},{"Manager2","Lv660"},{"Kid1","Lv690"},
+    {"FightClub1","Lv720"},{"FightClub2","Lv750"},{"Momo1","Lv780"},{"Momo2","Lv810"},
+    {"Momo3","Lv840"},{"Suda1","Lv870"},{"Suda2","Lv900"},{"Manager2_1","Lv930"},
+    {"Manager2_2","Lv960"},{"Manager2_3","Lv990"},{"Hinata1","Lv1020"},{"Hinata2","Lv1050"},
+    {"Hinata3","Lv1080"},{"Hinata4","Lv1110"},{"OldMan1","Lv1140"},{"OldMan2","Lv1170"},
+    {"OldMan3","Lv1200"},{"Shino1","Lv1210"},{"Shino2","Lv1230"},{"MysteriousSorcerer1","Lv1280"},
+    {"MysteriousSorcerer2","Lv1320"},{"MysteriousSorcerer3","Lv1360"},{"WoundedSpy1","Lv1400"},{"WoundedSpy2","Lv1430"},
+    {"WoundedSpy3","Lv1460"},{"Miwa1","Lv1460"},{"Miwa2","Lv1480"},{"JujutsuCourier1","Lv1500"},
+    {"JujutsuCourier2","Lv1550"},{"JujutsuCourier3","Lv1600"},{"CurseHunter1","Lv1650"},{"CurseHunter2","Lv1700"},
+    {"CurseHunter3","Lv1750"},
+}
+local QUEST_LIST = {} -- ids only (used by Auto Next cycling)
+for _, q in ipairs(QUEST_DATA) do table.insert(QUEST_LIST, q[1]) end
+local selQuest = 1        -- selected index into QUEST_DATA
+local AutoNext = false    -- auto-advance through all quests
+local updateQuestLabel    -- forward declaration (assigned in the GUI)
+local function currentQuestId()   return QUEST_DATA[selQuest] and QUEST_DATA[selQuest][1] or "Bully1" end
+local function currentQuestName() return QUEST_DATA[selQuest] and QUEST_DATA[selQuest][2] or "?" end
+
+-- // Character folders
+local Characters = workspace:WaitForChild("Characters")
+local ServerF    = Characters:WaitForChild("Server")
+local PlayersF   = ServerF:WaitForChild("Players")
+local NPCsF      = ServerF:FindFirstChild("NPCs")
+
+--========================================================--
+--  IDENTIFY OUR OWN SERVER MODEL
+--========================================================--
+local MyModel = nil
+pcall(function()
+    local old
+    old = hookmetamethod(game, "__namecall", function(self, ...)
+        local m = getnamecallmethod()
+        if m == "InvokeServer" and typeof(self) == "Instance" then
+            if self == DamageCharacter then
+                local a = {...}
+                local info = a[3]
+                if typeof(info) == "table" and typeof(info.LocalCharacter) == "Instance"
+                   and info.LocalCharacter.Parent == PlayersF then
+                    MyModel = info.LocalCharacter
+                end
+            elseif self == StartSkill then
+                local a = {...}
+                if typeof(a[2]) == "Instance" and a[2].Parent == PlayersF then
+                    MyModel = a[2]
+                end
+            end
+        end
+        return old(self, ...)
+    end)
+end)
+
+local function getModel()
+    if MyModel and MyModel.Parent == PlayersF then return MyModel end
+    local char = LocalPlayer.Character
+    if char and char.Parent == PlayersF then MyModel = char return char end
+    local refPos
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        refPos = char.HumanoidRootPart.Position
+    elseif workspace.CurrentCamera then
+        refPos = workspace.CurrentCamera.CFrame.Position
+    end
+    if refPos then
+        local best, bestD
+        for _, m in ipairs(PlayersF:GetChildren()) do
+            local hrp = m:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local d = (hrp.Position - refPos).Magnitude
+                if not bestD or d < bestD then best, bestD = m, d end
+            end
+        end
+        return best
+    end
+    return nil
+end
+
+--========================================================--
+--  TARGETING + ATTACK
+--========================================================--
+local function collectTargets(range)
+    range = range or ATTACK_RANGE
+    local myModel = getModel()
+    local myHRP = myModel and myModel:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return {}, nil, nil end
+    local myPos = myHRP.Position
+    local targets = {}
+    local function scan(folder)
+        if not folder then return end
+        for _, m in ipairs(folder:GetChildren()) do
+            if m ~= myModel then
+                local h = m:FindFirstChild("HumanoidRootPart")
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                if h and hum and hum.Health > 0 and (h.Position - myPos).Magnitude <= range then
+                    table.insert(targets, m)
+                end
+            end
+        end
+    end
+    scan(NPCsF)
+    if HIT_PLAYERS then scan(PlayersF) end
+    return targets, myModel, myHRP
+end
+
+local function getNearest(range)
+    local targets, myModel, myHRP = collectTargets(range)
+    if not myHRP or #targets == 0 then return nil, myModel, myHRP end
+    local nearest, nd
+    for _, m in ipairs(targets) do
+        local h = m:FindFirstChild("HumanoidRootPart")
+        if h then
+            local d = (h.Position - myHRP.Position).Magnitude
+            if not nd or d < nd then nearest, nd = m, d end
+        end
+    end
+    return nearest, myModel, myHRP
+end
+
+local combo = 1
+local function attackList(targets, myModel, myHRP)
+    if not myModel or not myHRP or #targets == 0 then return end
+    local first = targets[1]:FindFirstChild("HumanoidRootPart")
+    local dir = (first and (first.Position - myHRP.Position).Unit) or myHRP.CFrame.LookVector
+    -- fire both calls non-blocking for max speed
+    task.spawn(function() pcall(function()
+        StartSkill:InvokeServer("Punch", myModel, dir, nil, combo, 1)
+    end) end)
+    task.spawn(function() pcall(function()
+        DamageCharacter:InvokeServer(targets, true, {
+            WindowID = myModel.Name .. "_Punch",
+            LocalCharacter = myModel,
+            SkillID = "Punch",
+            CanParry = true,
+            Origin = myHRP.CFrame,
+        })
+    end) end)
+    combo = combo % 5 + 1
+end
+
+--========================================================--
+--  ATTACK LOOP + KILL AURA (tween to NPC)
+--========================================================--
+local FastOn = false
+local KillOn = false
+local TWEEN_SPEED  = 220   -- studs/sec glide speed toward the NPC
+local STICK_OFFSET = 4     -- how close to hover next to the NPC
+
+-- Fast Attack: hammer everyone in range as fast as possible
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if FastOn then
+            task.spawn(function() pcall(function() attackList(collectTargets()) end) end)
+        end
+        task.wait(math.max(TICK, 0.05)) -- minimum 50ms; TICK=0 otherwise spams 60x/sec = major lag
+    end
+end)
+
+-- computes WHERE YOU STAND relative to the target NPC (Top / Front / Bottom + X/Y/Z offset)
+local function auraGoal(nh)
+    local base = nh.Position
+    local off
+    if AURA_MODE == "Top" then
+        off = Vector3.new(0, STICK_OFFSET, 0)
+    elseif AURA_MODE == "Bottom" then
+        off = Vector3.new(0, -STICK_OFFSET, 0)
+    else -- Front
+        off = nh.CFrame.LookVector * STICK_OFFSET
+    end
+    local pos = base + off + Vector3.new(OX, OY, OZ)
+    -- STABLE orientation: look at the NPC only on the horizontal plane.
+    -- (CFrame.new(pos, base) spins/shakes when pos is directly above or below base.)
+    local flat = Vector3.new(base.X, pos.Y, base.Z)
+    if (flat - pos).Magnitude < 0.1 then
+        return CFrame.new(pos)
+    end
+    return CFrame.new(pos, flat)
+end
+
+-- Kill Nearest Aura: glide to the closest NPC and kill it (INDEPENDENT toggle)
+local BringOn = false
+
+-- smooth, STABLE movement every frame (single per-frame Lerp = no shaking)
+CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function(dt)
+    if getgenv().NexoHubSession ~= SESSION then return end
+    if not KillOn then return end
+    local n, _, hrp = getNearest(AURA_RANGE)
+    if not (n and hrp) then return end
+    local nh = n:FindFirstChild("HumanoidRootPart")
+    if not nh then return end
+    local goal = auraGoal(nh)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.CFrame = hrp.CFrame:Lerp(goal, math.clamp(dt * 28, 0, 1))
+    end)
+end)
+
+-- attack loop (kept separate from movement so movement stays smooth)
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if KillOn then
+            local n, mm, hrp = getNearest(AURA_RANGE)
+            if n and hrp then
+                task.spawn(function() pcall(function() attackList({n}, mm, hrp) end) end)
+            end
+        end
+        task.wait(0.03)
+    end
+end)
+
+-- Bring NPCs: pull every NPC in bring range to you and AOE them (INDEPENDENT toggle)
+-- remembers each NPC's original spot so they can be sent back when Bring is turned off
+local broughtOrigins = {}
+local function restoreBrought()
+    for m, cf in pairs(broughtOrigins) do
+        if m and m.Parent then
+            local h = m:FindFirstChild("HumanoidRootPart")
+            if h then pcall(function() h.CFrame = cf end) end
+        end
+    end
+    broughtOrigins = {}
+end
+
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if BringOn then
+            local targets, mm, hrp = collectTargets(BRING_RANGE)
+            if hrp and #targets > 0 then
+                for i, m in ipairs(targets) do
+                    local h = m:FindFirstChild("HumanoidRootPart")
+                    if h then
+                        if not broughtOrigins[m] then broughtOrigins[m] = h.CFrame end -- save original once
+                        local angle = (i / #targets) * math.pi * 2
+                        local off = Vector3.new(math.cos(angle) * BRING_OFFSET, 0, math.sin(angle) * BRING_OFFSET)
+                        pcall(function() h.CFrame = CFrame.new(hrp.Position + off) end)
+                    end
+                end
+                task.spawn(function() pcall(function() attackList(targets, mm, hrp) end) end)
+            end
+        end
+        task.wait(0.03)
+    end
+end)
+
+-- Bring EVERY NPC in the folder (ignores range) -- separate INDEPENDENT toggle
+local BringAllOn = false
+local function collectAllNPCs()
+    local myModel = getModel()
+    local myHRP = myModel and myModel:FindFirstChild("HumanoidRootPart")
+    if not myHRP or not NPCsF then return {}, nil, nil end
+    local targets = {}
+    for _, m in ipairs(NPCsF:GetChildren()) do
+        if m ~= myModel then
+            local h = m:FindFirstChild("HumanoidRootPart")
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if h and hum and hum.Health > 0 then
+                table.insert(targets, m)
+            end
+        end
+    end
+    return targets, myModel, myHRP
+end
+
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if BringAllOn then
+            local targets, mm, hrp = collectAllNPCs()
+            if hrp and #targets > 0 then
+                for i, m in ipairs(targets) do
+                    local h = m:FindFirstChild("HumanoidRootPart")
+                    if h then
+                        if not broughtOrigins[m] then broughtOrigins[m] = h.CFrame end
+                        local angle = (i / #targets) * math.pi * 2
+                        local off = Vector3.new(math.cos(angle) * BRING_OFFSET, 0, math.sin(angle) * BRING_OFFSET)
+                        pcall(function() h.CFrame = CFrame.new(hrp.Position + off) end)
+                    end
+                end
+                task.spawn(function() pcall(function() attackList(targets, mm, hrp) end) end)
+            end
+        end
+        task.wait(0.03)
+    end
+end)
+
+-- Reach & Kill: for NPCs that CAN'T be brought (anchored/locked), tween YOU to them (separate toggle)
+local ReachOn = false
+CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function(dt)
+    if getgenv().NexoHubSession ~= SESSION then return end
+    if not ReachOn then return end
+    local targets, _, hrp = collectAllNPCs()
+    if not hrp then return end
+    local far, fd
+    for _, m in ipairs(targets) do
+        local h = m:FindFirstChild("HumanoidRootPart")
+        if h then
+            local d = (h.Position - hrp.Position).Magnitude
+            if d > 12 and (not fd or d < fd) then far, fd = h, d end
+        end
+    end
+    if far then
+        local goal = auraGoal(far)
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.CFrame = hrp.CFrame:Lerp(goal, math.clamp(dt * 28, 0, 1))
+        end)
+    end
+end)
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if ReachOn then
+            local targets, mm, hrp = collectAllNPCs()
+            if hrp and #targets > 0 then
+                task.spawn(function() pcall(function() attackList(targets, mm, hrp) end) end)
+            end
+        end
+        task.wait(0.03)
+    end
+end)
+
+-- Forward-declare fly vars HERE so the quest RenderStepped closure below can capture them.
+-- In Lua, closures only see locals declared BEFORE them; declaring bv/bg after = always nil inside.
+local flying = false
+local bv, bg
+
+-- Auto Quest: keep the quest accepted + farm ONLY its target NPCs (separate toggle)
+local QuestOn = false
+
+-- The quest mob's NAME tag lives on its CLIENT rig (workspace.Characters.Client),
+-- NOT the server model we attack. So we read names from client rigs, then match the
+-- server NPCs to them by position. This targets ONLY the quest mobs.
+-- read the current quest's target enemy from the quest tracker text ("Defeat X (n/m)")
+local function questTarget()
+    if QUEST_TARGET ~= "" then return QUEST_TARGET end
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        for _, d in ipairs(pg:GetDescendants()) do
+            if d:IsA("TextLabel") then
+                local nm = string.match(d.Text, "([%a%s]+)%s*%(%d+/%d+%)")
+                if nm and #nm > 2 then
+                    nm = nm:gsub("^%s+", ""):gsub("%s+$", "")
+                    nm = nm:gsub("^[Dd]efeat%s+the%s+", ""):gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", ""):gsub("^[Cc]ollect%s+", "")
+                    nm = nm:gsub("s$", "") -- singularize (Students -> Student)
+                    return nm
+                end
+            end
+        end
+    end
+    return ""
+end
+local function questTargetPositions()
+    local hits = {}
+    local ClientF = workspace.Characters:FindFirstChild("Client")
+    local qt = questTarget()
+    if not ClientF or qt == "" then return hits end
+    local target = string.lower(qt)
+    for _, d in ipairs(ClientF:GetDescendants()) do
+        if d:IsA("TextLabel") and string.find(string.lower(d.Text), target, 1, true) then
+            local rig = d:FindFirstAncestorWhichIsA("Model")
+            local hrp = rig and rig:FindFirstChild("HumanoidRootPart")
+            if hrp then table.insert(hits, hrp.Position) end
+        end
+    end
+    return hits
+end
+-- only the server NPCs that belong to the current quest (matched to the named client rigs)
+local function collectQuestNPCs()
+    local myModel = getModel()
+    local myHRP = myModel and myModel:FindFirstChild("HumanoidRootPart")
+    if not myHRP or not NPCsF then return {}, nil, nil end
+    if questTarget() == "" then return {}, myModel, myHRP end
+    local hits = questTargetPositions()
+    local targets = {}
+    for _, m in ipairs(NPCsF:GetChildren()) do
+        if m ~= myModel then
+            local h = m:FindFirstChild("HumanoidRootPart")
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if h and hum and hum.Health > 0 then
+                for _, pos in ipairs(hits) do
+                    if (h.Position - pos).Magnitude < 10 then
+                        table.insert(targets, m)
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return targets, myModel, myHRP
+end
+
+-- Fast Quest: snaps ALL quest NPCs to you ONCE per new spawn wave (not a repeating loop).
+-- Each NPC model instance is the key; when it dies and a new one spawns, it gets brought again.
+local FastQuestOn = false
+local fastQuestBrought = {} -- key = NPC model instance, value = Vector3 where it was brought
+local fastQuestFrozenPos = nil -- player CFrame held in place during multi-NPC Fast Quest bring
+
+-- Auto Quest runtime CACHE (heavy scans run ~4x/sec, NOT every frame -> fixes lag)
+local questNPCs, questMyModel, questMyHRP = {}, nil, nil
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if QuestOn then
+            local t, mm, hrp = collectQuestNPCs()
+            questNPCs, questMyModel, questMyHRP = t or {}, mm, hrp
+            -- Fast Quest: go TO the NPC (Auto Quest tween), then bring once arrived (<=20 studs).
+            -- fastQuestBrought[m] = Vector3 of where it was brought (NOT just true).
+            -- If it escapes (moves >15 studs from that spot): reset flag so player goes back & re-brings.
+            if FastQuestOn and hrp and #questNPCs > 0 then
+                -- Step 1: detect escaped/unfrozen NPCs and reset their flag
+                for m, broughtPos in pairs(fastQuestBrought) do
+                    if not m.Parent then
+                        fastQuestBrought[m] = nil -- dead NPC, clean up
+                    elseif typeof(broughtPos) == "Vector3" then
+                        local h = m:FindFirstChild("HumanoidRootPart")
+                        if h and (h.Position - broughtPos).Magnitude > 15 then
+                            -- NPC escaped (not taking damage / not frozen) -> go back and re-bring
+                            fastQuestBrought[m] = nil
+                        end
+                    end
+                end
+                -- Step 2: only bring once player has arrived near a quest NPC
+                local arrived = false
+                for _, m in ipairs(questNPCs) do
+                    local h = m:FindFirstChild("HumanoidRootPart")
+                    if h and (h.Position - hrp.Position).Magnitude <= 20 then
+                        arrived = true break
+                    end
+                end
+                if arrived then
+                    if #questNPCs == 1 then
+                        -- Only 1 NPC: teleport PLAYER directly to it instead of bringing it to the player
+                        local m = questNPCs[1]
+                        if not fastQuestBrought[m] then
+                            local h = m:FindFirstChild("HumanoidRootPart")
+                            if h then
+                                fastQuestBrought[m] = h.Position -- track NPC position for escape detection
+                                pcall(function() hrp.CFrame = auraGoal(h) end) -- snap player onto NPC
+                            end
+                        end
+                    else
+                        -- 2+ NPCs: bring them here, then FREEZE player at this exact spot
+                        fastQuestFrozenPos = hrp.CFrame
+                        for i, m in ipairs(questNPCs) do
+                            if not fastQuestBrought[m] then
+                                local h = m:FindFirstChild("HumanoidRootPart")
+                                if h then
+                                    local angle = (i / math.max(#questNPCs, 1)) * math.pi * 2
+                                    local tx = hrp.Position.X + math.cos(angle) * BRING_OFFSET
+                                    local tz = hrp.Position.Z + math.sin(angle) * BRING_OFFSET
+                                    local boughtPos = Vector3.new(tx, h.Position.Y, tz)
+                                    fastQuestBrought[m] = boughtPos -- store for escape detection
+                                    pcall(function() h.CFrame = CFrame.new(boughtPos) end)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            questNPCs = {}
+            fastQuestFrozenPos = nil -- NPCs all dead; unfreeze player for next wave
+        end
+        task.wait(0.08)
+    end
+end)
+
+-- (re)accept the SELECTED quest FAST; this NEVER changes your selection
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if QuestOn or AutoNext then -- BringQuestOn requires QuestOn, no extra check
+            pcall(function() AcceptQuest:InvokeServer(currentQuestId()) end)
+        end
+        task.wait(0.3)
+    end
+end)
+
+-- Auto Quest movement + air hover between waves + player freeze during Fast Quest multi-bring
+local questHoverPos = nil -- last player CFrame; used to freeze mid-air between quest waves
+CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function(dt)
+    if getgenv().NexoHubSession ~= SESSION then return end
+    if not QuestOn then questHoverPos = nil return end
+    local mdl = getModel()
+    local hrp = mdl and mdl:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    -- No quest NPCs (between waves / respawning): freeze at last position so player doesn't fall
+    if #questNPCs == 0 then
+        if questHoverPos then
+            pcall(function()
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.CFrame = questHoverPos
+            end)
+        end
+        return
+    end
+    -- Fast Quest + multiple NPCs: hold player frozen where the bring happened
+    if FastQuestOn and fastQuestFrozenPos and #questNPCs > 1 then
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.CFrame = fastQuestFrozenPos
+        end)
+        questHoverPos = fastQuestFrozenPos
+        return
+    end
+    -- Normal Auto Quest: lerp smoothly toward the nearest quest NPC
+    local nearest, nd
+    for _, m in ipairs(questNPCs) do
+        local h = m:FindFirstChild("HumanoidRootPart")
+        if h then
+            local d = (h.Position - hrp.Position).Magnitude
+            if not nd or d < nd then nearest, nd = h, d end
+        end
+    end
+    if nearest then
+        local goal = auraGoal(nearest)
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.CFrame = hrp.CFrame:Lerp(goal, math.clamp(dt * 28, 0, 1))
+        end)
+        questHoverPos = hrp.CFrame -- save every frame for hover when NPCs die
+    end
+end)
+
+-- attack the cached quest NPCs
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        if QuestOn and #questNPCs > 0 and questMyModel and questMyHRP then
+            task.spawn(function() pcall(function() attackList(questNPCs, questMyModel, questMyHRP) end) end)
+        end
+        task.wait(0.03)
+    end
+end)
+
+-- NOCLIP: cache body parts so GetDescendants only runs once per character (not 60x/sec = lag fix)
+local noclipCache, noclipModel = {}, nil
+CONNS[#CONNS+1] = RunService.Stepped:Connect(function()
+    if getgenv().NexoHubSession ~= SESSION then return end
+    if not (KillOn or QuestOn or ReachOn) then return end
+    local mdl = getModel()
+    if not mdl then noclipCache = {} noclipModel = nil return end
+    if mdl ~= noclipModel then -- rebuild cache only when character changes
+        noclipModel = mdl
+        noclipCache = {}
+        for _, p in ipairs(mdl:GetDescendants()) do
+            if p:IsA("BasePart") then table.insert(noclipCache, p) end
+        end
+    end
+    for _, p in ipairs(noclipCache) do
+        if p and p.Parent then p.CanCollide = false end -- no pcall overhead
+    end
+end)
+
+--========================================================--
+--  FLY ENGINE  (flying/bv/bg declared above for closure access)
+--========================================================--
+local keys = { W=false, A=false, S=false, D=false, Up=false, Down=false }
+
+local function getBody()
+    local m = getModel()
+    if m then return m:FindFirstChild("HumanoidRootPart"), m:FindFirstChildOfClass("Humanoid") end
+    return nil, nil
+end
+
+local function stopFly()
+    flying = false
+    if bv then bv:Destroy() bv = nil end
+    if bg then bg:Destroy() bg = nil end
+    local _, hum = getBody()
+    if hum then pcall(function() hum.PlatformStand = false end) end
+end
+
+local function startFly()
+    local hrp, hum = getBody()
+    if not hrp then return end
+    if bv then bv:Destroy() end
+    if bg then bg:Destroy() end
+    bg = Instance.new("BodyGyro")
+    bg.P = 9e4 bg.D = 750 bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9) bg.CFrame = hrp.CFrame bg.Parent = hrp
+    bv = Instance.new("BodyVelocity")
+    bv.Velocity = Vector3.zero bv.MaxForce = Vector3.new(9e9, 9e9, 9e9) bv.Parent = hrp
+    if hum then pcall(function() hum.PlatformStand = true end) end
+    flying = true
+end
+
+CONNS[#CONNS+1] = RunService.RenderStepped:Connect(function()
+    if getgenv().NexoHubSession ~= SESSION then return end
+    if not flying then return end
+    local hrp, hum = getBody()
+    if not hrp then return end
+    if not (bv and bv.Parent == hrp) then startFly() return end
+    local cam = workspace.CurrentCamera
+    local dir = Vector3.zero
+    if keys.W then dir = dir + cam.CFrame.LookVector end
+    if keys.S then dir = dir - cam.CFrame.LookVector end
+    if keys.A then dir = dir - cam.CFrame.RightVector end
+    if keys.D then dir = dir + cam.CFrame.RightVector end
+    if keys.Up then dir = dir + Vector3.new(0, 1, 0) end
+    if keys.Down then dir = dir - Vector3.new(0, 1, 0) end
+    if dir.Magnitude == 0 and hum then dir = hum.MoveDirection end
+    if dir.Magnitude > 0 then dir = dir.Unit end
+    -- smooth accel/decel + smooth turning
+    local targetVel = dir * SPEED
+    bv.Velocity = bv.Velocity:Lerp(targetVel, 0.25)
+    bg.CFrame = bg.CFrame:Lerp(cam.CFrame, 0.35)
+end)
+
+UserInput.InputEnded:Connect(function(input)
+    local k = input.KeyCode
+    if k == Enum.KeyCode.W then keys.W = false
+    elseif k == Enum.KeyCode.A then keys.A = false
+    elseif k == Enum.KeyCode.S then keys.S = false
+    elseif k == Enum.KeyCode.D then keys.D = false
+    elseif k == Enum.KeyCode.Space then keys.Up = false
+    elseif k == Enum.KeyCode.LeftShift then keys.Down = false
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if flying then task.wait(1) startFly() end
+end)
+
+-- ANTI-AFK: fire a dummy input when the game detects idling (prevents AFK kick)
+pcall(function()
+    LocalPlayer.Idled:Connect(function()
+        if getgenv().NexoHubSession ~= SESSION then return end
+        local VU = game:GetService("VirtualUser")
+        pcall(function() VU:CaptureController() VU:ClickButton2(Vector2.new()) end)
+    end)
+end)
+
+--========================================================--
+--  SMOOTH GUI
+--========================================================--
+local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
+local oldGui = parentGui:FindFirstChild("NexoHubGui")
+if oldGui then oldGui:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "NexoHubGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = parentGui
+
+local Main = Instance.new("ScrollingFrame")
+Main.Size = UDim2.new(0, 270, 0, 440)          -- visible height (the panel scrolls)
+Main.Position = UDim2.new(0.5, -135, 0.05, 0)
+Main.CanvasSize = UDim2.new(0, 0, 0, 708)       -- full content height
+Main.ScrollBarThickness = 6
+Main.ScrollBarImageColor3 = Color3.fromRGB(0, 200, 255)
+Main.ScrollingDirection = Enum.ScrollingDirection.Y
+Main.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Parent = ScreenGui
+local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 12) c.Parent = Main
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(0, 200, 255) stroke.Thickness = 1.4 stroke.Transparency = 0.2
+stroke.Parent = Main
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 34) Title.BackgroundTransparency = 1
+Title.Text = "🔥 NEXO HUB" Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16 Title.TextColor3 = Color3.fromRGB(0, 210, 255) Title.Parent = Main
+
+local ti = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+local function makeToggle(labelText, y, onToggle)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0, 170, 0, 26) lbl.Position = UDim2.new(0, 18, 0, y)
+    lbl.BackgroundTransparency = 1 lbl.Text = labelText lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 14 lbl.TextColor3 = Color3.fromRGB(235, 235, 235)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.Parent = Main
+    local sw = Instance.new("TextButton")
+    sw.Size = UDim2.new(0, 50, 0, 26) sw.Position = UDim2.new(1, -68, 0, y)
+    sw.BackgroundColor3 = Color3.fromRGB(55, 55, 65) sw.Text = "" sw.AutoButtonColor = false sw.Parent = Main
+    local swc = Instance.new("UICorner") swc.CornerRadius = UDim.new(1, 0) swc.Parent = sw
+    local kn = Instance.new("Frame")
+    kn.Size = UDim2.new(0, 20, 0, 20) kn.Position = UDim2.new(0, 3, 0.5, -10)
+    kn.BackgroundColor3 = Color3.fromRGB(230, 230, 230) kn.Parent = sw
+    local knc = Instance.new("UICorner") knc.CornerRadius = UDim.new(1, 0) knc.Parent = kn
+    local state = false
+    local function apply()
+        if state then
+            TweenService:Create(kn, ti, {Position = UDim2.new(1, -23, 0.5, -10)}):Play()
+            TweenService:Create(sw, ti, {BackgroundColor3 = Color3.fromRGB(0, 200, 120)}):Play()
+        else
+            TweenService:Create(kn, ti, {Position = UDim2.new(0, 3, 0.5, -10)}):Play()
+            TweenService:Create(sw, ti, {BackgroundColor3 = Color3.fromRGB(55, 55, 65)}):Play()
+        end
+    end
+    sw.MouseButton1Click:Connect(function() state = not state apply() onToggle(state) end)
+    return function(v) state = v apply() onToggle(v) end
+end
+
+makeToggle("⚡ Fast Attack", 42, function(on) FastOn = on end)
+makeToggle("🎯 Kill Nearest Aura", 74, function(on) KillOn = on end)
+makeToggle("🧲 Bring NPCs", 106, function(on) BringOn = on if not on and not BringAllOn then restoreBrought() end end)
+makeToggle("🌐 Bring Every NPC", 138, function(on) BringAllOn = on if not on and not BringOn then restoreBrought() end end)
+makeToggle("🔪 Reach & Kill", 170, function(on) ReachOn = on end)
+makeToggle("📜 Auto Quest", 202, function(on) QuestOn = on if on then task.spawn(function() pcall(function() AcceptQuest:InvokeServer(currentQuestId()) end) end) end end)
+local setFlyToggle = makeToggle("🕊 Fly (V)", 234, function(on)
+    if on then startFly() else stopFly() end
+end)
+
+-- keyboard for fly (declared after startFly/setFlyToggle exist)
+UserInput.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    local k = input.KeyCode
+    if k == Enum.KeyCode.W then keys.W = true
+    elseif k == Enum.KeyCode.A then keys.A = true
+    elseif k == Enum.KeyCode.S then keys.S = true
+    elseif k == Enum.KeyCode.D then keys.D = true
+    elseif k == Enum.KeyCode.Space then keys.Up = true
+    elseif k == Enum.KeyCode.LeftShift then keys.Down = true
+    elseif k == TOGGLE_KEY then setFlyToggle(not flying)
+    end
+end)
+
+-- reusable slider factory (Fly Speed / Aura Range / Bring Range)
+local function makeSlider(labelText, y, minV, maxV, initV, onChange)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -36, 0, 18) lbl.Position = UDim2.new(0, 18, 0, y)
+    lbl.BackgroundTransparency = 1 lbl.Font = Enum.Font.GothamMedium lbl.TextSize = 13
+    lbl.TextColor3 = Color3.fromRGB(235, 235, 235)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.Parent = Main
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(1, -36, 0, 6) track.Position = UDim2.new(0, 18, 0, y + 20)
+    track.BackgroundColor3 = Color3.fromRGB(55, 55, 65) track.BorderSizePixel = 0 track.Parent = Main
+    local trc = Instance.new("UICorner") trc.CornerRadius = UDim.new(1, 0) trc.Parent = track
+    local fill = Instance.new("Frame")
+    fill.BackgroundColor3 = Color3.fromRGB(0, 200, 255) fill.BorderSizePixel = 0 fill.Parent = track
+    local flc = Instance.new("UICorner") flc.CornerRadius = UDim.new(1, 0) flc.Parent = fill
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 14, 0, 14) knob.AnchorPoint = Vector2.new(0.5, 0.5)
+    knob.BackgroundColor3 = Color3.fromRGB(235, 235, 235) knob.Parent = track
+    local knc = Instance.new("UICorner") knc.CornerRadius = UDim.new(1, 0) knc.Parent = knob
+
+    local value = initV
+    local function render(rel)
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        knob.Position = UDim2.new(rel, 0, 0.5, 0)
+        lbl.Text = labelText .. ": " .. value
+    end
+    local function setRel(rel)
+        rel = math.clamp(rel, 0, 1)
+        value = math.floor(minV + (maxV - minV) * rel + 0.5)
+        render(rel)
+        if onChange then onChange(value) end
+    end
+    render((initV - minV) / (maxV - minV))
+
+    local dragging = false
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setRel((i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X)
+        end
+    end)
+    UserInput.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            setRel((i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X)
+        end
+    end)
+    UserInput.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    return function(newV) setRel((newV - minV) / (maxV - minV)) end
+end
+
+makeSlider("Fly Speed", 264, MIN_SPEED, MAX_SPEED, SPEED, function(v) SPEED = v end)
+makeSlider("Aura Range", 302, 50, 2000, AURA_RANGE, function(v) AURA_RANGE = v end)
+makeSlider("Bring Range", 340, 50, 2000, BRING_RANGE, function(v) BRING_RANGE = v end)
+
+-- Aura Position mode: Top / Front / Bottom
+local PosLabel = Instance.new("TextLabel")
+PosLabel.Size = UDim2.new(1, -36, 0, 16) PosLabel.Position = UDim2.new(0, 18, 0, 376)
+PosLabel.BackgroundTransparency = 1 PosLabel.Text = "Aura Position"
+PosLabel.Font = Enum.Font.GothamMedium PosLabel.TextSize = 13
+PosLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
+PosLabel.TextXAlignment = Enum.TextXAlignment.Left PosLabel.Parent = Main
+
+local modeButtons = {}
+local function refreshModes()
+    for name, b in pairs(modeButtons) do
+        local sel = (AURA_MODE == name)
+        TweenService:Create(b, ti, {BackgroundColor3 = sel and Color3.fromRGB(0, 200, 120) or Color3.fromRGB(45, 45, 55)}):Play()
+    end
+end
+local function makeModeBtn(name, idx)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 74, 0, 26) b.Position = UDim2.new(0, 18 + (idx - 1) * 80, 0, 396)
+    b.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+    b.Text = name b.Font = Enum.Font.GothamBold b.TextSize = 12
+    b.TextColor3 = Color3.fromRGB(235, 235, 235) b.AutoButtonColor = true b.Parent = Main
+    local bc = Instance.new("UICorner") bc.CornerRadius = UDim.new(0, 8) bc.Parent = b
+    b.MouseButton1Click:Connect(function() AURA_MODE = name refreshModes() end)
+    modeButtons[name] = b
+end
+makeModeBtn("Top", 1)
+makeModeBtn("Front", 2)
+makeModeBtn("Bottom", 3)
+refreshModes()
+
+-- X / Y / Z offset sliders for fine-tuning the Aura position
+makeSlider("Offset X", 430, -200, 200, OX, function(v) OX = v end)
+local setOY = makeSlider("Offset Y", 468, -200, 200, OY, function(v) OY = v end)
+makeSlider("Offset Z", 506, -200, 200, OZ, function(v) OZ = v end)
+
+-- up / down (hold) for fly
+local function makeHoldBtn(text, xScale, key)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.5, -24, 0, 30)
+    b.Position = UDim2.new(xScale, xScale == 0 and 18 or 6, 0, 552)
+    b.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    b.Text = text b.Font = Enum.Font.GothamBold b.TextSize = 13
+    b.TextColor3 = Color3.fromRGB(235, 235, 235) b.AutoButtonColor = true b.Parent = Main
+    local bc = Instance.new("UICorner") bc.CornerRadius = UDim.new(0, 8) bc.Parent = b
+    b.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then keys[key] = true end
+    end)
+    b.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then keys[key] = false end
+    end)
+end
+makeHoldBtn("▲ Up", 0, "Up")
+makeHoldBtn("▼ Down", 0.5, "Down")
+
+-- Auto Quest: searchable + scrollable quest selector
+local QuestBtn = Instance.new("TextButton")
+QuestBtn.Size = UDim2.new(1, -36, 0, 26) QuestBtn.Position = UDim2.new(0, 18, 0, 588)
+QuestBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45) QuestBtn.AutoButtonColor = true
+QuestBtn.Font = Enum.Font.GothamBold QuestBtn.TextSize = 12
+QuestBtn.TextColor3 = Color3.fromRGB(0, 210, 255)
+QuestBtn.Text = "Quest: " .. currentQuestName() .. "   ▾"
+QuestBtn.Parent = Main
+local qbc = Instance.new("UICorner") qbc.CornerRadius = UDim.new(0, 8) qbc.Parent = QuestBtn
+updateQuestLabel = function() QuestBtn.Text = "Quest: " .. currentQuestName() .. "   ▾" end
+
+-- dropdown panel (opens upward; overlays the hub while open)
+local Dropdown = Instance.new("Frame")
+Dropdown.Size = UDim2.new(1, -36, 0, 250) Dropdown.Position = UDim2.new(0, 18, 0, 332)
+Dropdown.BackgroundColor3 = Color3.fromRGB(22, 22, 30) Dropdown.BorderSizePixel = 0
+Dropdown.Visible = false Dropdown.ZIndex = 50 Dropdown.Parent = Main
+local ddc = Instance.new("UICorner") ddc.CornerRadius = UDim.new(0, 8) ddc.Parent = Dropdown
+local dds = Instance.new("UIStroke") dds.Color = Color3.fromRGB(0, 200, 255) dds.Thickness = 1.2 dds.Parent = Dropdown
+
+local Search = Instance.new("TextBox")
+Search.Size = UDim2.new(1, -12, 0, 26) Search.Position = UDim2.new(0, 6, 0, 6)
+Search.BackgroundColor3 = Color3.fromRGB(40, 40, 50) Search.BorderSizePixel = 0
+Search.Font = Enum.Font.Gotham Search.TextSize = 12 Search.TextColor3 = Color3.fromRGB(235, 235, 235)
+Search.PlaceholderText = "Search quest..." Search.Text = "" Search.ClearTextOnFocus = false
+Search.ZIndex = 51 Search.Parent = Dropdown
+local scc = Instance.new("UICorner") scc.CornerRadius = UDim.new(0, 6) scc.Parent = Search
+
+local Scroll = Instance.new("ScrollingFrame")
+Scroll.Size = UDim2.new(1, -12, 1, -40) Scroll.Position = UDim2.new(0, 6, 0, 36)
+Scroll.BackgroundTransparency = 1 Scroll.BorderSizePixel = 0
+Scroll.ScrollBarThickness = 6 Scroll.ScrollBarImageColor3 = Color3.fromRGB(0, 200, 255)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 0) Scroll.ZIndex = 51 Scroll.Parent = Dropdown
+local sll = Instance.new("UIListLayout") sll.Padding = UDim.new(0, 4) sll.SortOrder = Enum.SortOrder.LayoutOrder sll.Parent = Scroll
+
+local function buildList(filter)
+    for _, ch in ipairs(Scroll:GetChildren()) do
+        if ch:IsA("TextButton") then ch:Destroy() end
+    end
+    filter = string.lower(filter or "")
+    local shown = 0
+    for i, q in ipairs(QUEST_DATA) do
+        local id, name = q[1], q[2]
+        if filter == "" or string.find(string.lower(name), filter, 1, true) or string.find(string.lower(id), filter, 1, true) then
+            shown = shown + 1
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, -6, 0, 26) b.LayoutOrder = i
+            b.BackgroundColor3 = (i == selQuest) and Color3.fromRGB(0, 150, 90) or Color3.fromRGB(40, 40, 50)
+            b.Font = Enum.Font.Gotham b.TextSize = 12 b.TextColor3 = Color3.fromRGB(235, 235, 235)
+            b.TextXAlignment = Enum.TextXAlignment.Left
+            b.Text = "  " .. name .. "   (" .. id .. ")"
+            b.ZIndex = 52 b.Parent = Scroll
+            local bc = Instance.new("UICorner") bc.CornerRadius = UDim.new(0, 6) bc.Parent = b
+            b.MouseButton1Click:Connect(function()
+                selQuest = i
+                updateQuestLabel()
+                Dropdown.Visible = false
+                if QuestOn or AutoNext then task.spawn(function() pcall(function() AcceptQuest:InvokeServer(currentQuestId()) end) end) end
+            end)
+        end
+    end
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, shown * 30 + 4)
+end
+
+QuestBtn.MouseButton1Click:Connect(function()
+    Dropdown.Visible = not Dropdown.Visible
+    if Dropdown.Visible then buildList(Search.Text) end
+end)
+Search:GetPropertyChangedSignal("Text"):Connect(function()
+    if Dropdown.Visible then buildList(Search.Text) end
+end)
+
+makeToggle("🔁 Auto Next Quest", 620, function(on) AutoNext = on end)
+makeToggle("⚡ Fast Quest [NOT REC]", 652, function(on)
+    FastQuestOn = on
+    if not on then fastQuestBrought = {} fastQuestFrozenPos = nil end
+end)
+-- status line
+local Status = Instance.new("TextLabel")
+Status.Size = UDim2.new(1, -20, 0, 16) Status.Position = UDim2.new(0, 10, 0, 682)
+Status.BackgroundTransparency = 1 Status.Text = "Ready"
+Status.Font = Enum.Font.Gotham Status.TextSize = 11
+Status.TextColor3 = Color3.fromRGB(150, 150, 160)
+Status.TextXAlignment = Enum.TextXAlignment.Left Status.Parent = Main
+task.spawn(function()
+    while getgenv().NexoHubSession == SESSION do
+        local t = select(1, collectTargets())
+        local parts = {}
+        if FastOn then table.insert(parts, "Attack") end
+        if KillOn then table.insert(parts, "Aura") end
+        if BringOn then table.insert(parts, "Bring") end
+        if BringAllOn then table.insert(parts, "BringAll") end
+        if ReachOn then table.insert(parts, "Reach") end
+        if QuestOn then table.insert(parts, "Quest") end
+        if FastQuestOn then table.insert(parts, "FastQ") end
+        if flying then table.insert(parts, "Fly") end
+        local active = #parts > 0 and table.concat(parts, "+") or "OFF"
+        Status.Text = active .. "  |  targets: " .. #t
+        Status.TextColor3 = (#parts > 0) and Color3.fromRGB(0,255,140) or Color3.fromRGB(150,150,160)
+        task.wait(0.25)
+    end
+end)
+
+-- draggable
+do
+    local dragging, dragStart, startPos
+    Title.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true dragStart = i.Position startPos = Main.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UserInput.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dragStart
+            Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+
+Main.Size = UDim2.new(0, 0, 0, 0)
+TweenService:Create(Main, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+    {Size = UDim2.new(0, 270, 0, 440)}):Play()
